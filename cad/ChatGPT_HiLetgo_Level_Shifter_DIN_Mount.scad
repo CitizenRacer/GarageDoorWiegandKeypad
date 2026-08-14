@@ -1,17 +1,20 @@
 // ChatGPT HiLetgo 4-channel BSS138 level-shifter DIN rail mount
-// Design version: 6
+// Design version: 7
 // VERSIONING RULE: Increment design_version by 1 for every repository check-in of this file.
 //
 // The DIN-rail spring geometry below is embedded directly from the STL supplied
 // by the user. Its shape is preserved exactly; the only new geometry is the
 // compact HiLetgo PCB snap cradle joined to its center.
-// v6 removes the original 4.3 mm center hole without adding a bump-out.
-// The hole is filled exactly within the original plate thickness so both faces remain flush.
+// v7 removes ALL mounting/lightening holes from the supplied DIN clip.
+// The former center hole and both rectangular side openings are filled flush
+// with the surrounding clip surfaces; no bump-outs are added.
+// The PCB cradle spans the full 10 mm width of the DIN clip so, when printed
+// on its broad side, every cradle feature starts at the build plate and needs no supports.
 //
 // HiLetgo PCB envelope used here: approximately 15.3 x 12.6 x 1.6 mm.
 
 $fn = 48;
-design_version = 6;
+design_version = 7;
 print_orientation = true;  // true = broad side on build plate for support-free printing
 
 // ---------- PCB ----------
@@ -23,7 +26,7 @@ pcb_z_clearance = 0.20;
 
 // ---------- CRADLE ----------
 clip_center_y = 5.0;
-cradle_depth_y = 8.0;   // clip itself is 10 mm wide along the DIN rail
+cradle_depth_y = 10.0;  // full clip width: y=0..10, eliminating support-only overhangs
 wall_t = 1.5;
 ledge_inset = 1.55;
 ledge_t = 1.2;
@@ -444,6 +447,34 @@ module center_hole_filler() {
         cylinder(h=3.0, r=2.15, center=false, $fn=64);
 }
 
+module side_opening_fillers() {
+    // Fill the two original side openings using the exact trapezoidal side
+    // profile defined by the supplied mesh. This closes the openings without
+    // extending beyond the clip's original exterior surfaces.
+    slot_y0 = 3.0;
+    slot_y1 = 7.0;
+    slot_z0 = -3.416352;
+    slot_z1 = -0.916352;
+    slot_x_inner_bottom = 5.0;
+    slot_x_inner_top = 14.330127;
+    slot_x_outer = 22.25;
+
+    module right_fill() {
+        translate([0, slot_y1, 0])
+            rotate([90,0,0])
+                linear_extrude(height=slot_y1-slot_y0, convexity=4)
+                    polygon(points=[
+                        [slot_x_inner_bottom, slot_z0],
+                        [slot_x_outer,        slot_z0],
+                        [slot_x_outer,        slot_z1],
+                        [slot_x_inner_top,    slot_z1]
+                    ]);
+    }
+
+    right_fill();
+    mirror([1,0,0]) right_fill();
+}
+
 module center_neck() {
     translate([0, clip_center_y, (neck_z_top + neck_z_bottom)/2])
         cube([neck_x, neck_y, neck_z_top - neck_z_bottom], center=true);
@@ -513,11 +544,12 @@ module pcb_cradle() {
 }
 
 module mount_installed() {
-    // No mounting holes. The former 4.3 mm hole is filled flush with the
-    // original DIN-clip plate; no square bump-out is added.
+    // No holes remain. The center hole and both rectangular side openings are
+    // filled only to their original surrounding surfaces; no bump-outs are added.
     union() {
         source_din_clip();
         center_hole_filler();
+        side_opening_fillers();
         pcb_cradle();
     }
 }
