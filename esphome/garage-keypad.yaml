@@ -153,6 +153,18 @@ interval:
                       id(blue_status_phase) =
                           (id(blue_status_phase) + 1) % 4;
 
+# Expose the same Home Assistant connection state used by the blue LED as a
+# diagnostic entity on the Garage Keypad device. The connectivity device class
+# makes Home Assistant render the states as Connected / Disconnected.
+binary_sensor:
+  - platform: template
+    name: "Home Assistant Connected"
+    id: home_assistant_connected
+    device_class: connectivity
+    entity_category: diagnostic
+    lambda: |-
+      return id(home_assistant_api_connections) > 0;
+
 sensor:
   - platform: wifi_signal
     name: "WiFi Signal"
