@@ -28,6 +28,46 @@ captive_portal:
 web_server:
   port: 80
 
+# The onboard blue LED on this 30-pin ESP32-WROOM-32 board is expected
+# to be connected to GPIO2. It is kept internal because firmware owns it
+# as a connection-status indicator rather than a user-controllable light.
+output:
+  - platform: gpio
+    pin: GPIO2
+    id: blue_led_output
+
+light:
+  - platform: binary
+    id: blue_status_led
+    output: blue_led_output
+    internal: true
+    restore_mode: ALWAYS_OFF
+
+# Status LED behavior:
+#   Blinking: Wi-Fi is disconnected / searching.
+#   Off:      Wi-Fi is connected, but Home Assistant is not connected yet.
+#   Solid:    Home Assistant is connected to the ESPHome native API.
+#
+# state_subscription_only prevents a logger-only API connection from being
+# mistaken for Home Assistant.
+interval:
+  - interval: 500ms
+    then:
+      - if:
+          condition:
+            api.connected:
+              state_subscription_only: true
+          then:
+            - light.turn_on: blue_status_led
+          else:
+            - if:
+                condition:
+                  wifi.connected:
+                then:
+                  - light.turn_off: blue_status_led
+                else:
+                  - light.toggle: blue_status_led
+
 sensor:
   - platform: wifi_signal
     name: "WiFi Signal"
