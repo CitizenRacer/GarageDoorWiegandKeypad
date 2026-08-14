@@ -13,7 +13,7 @@ logger:
 # native API. The Noise PSK is stored only in the local secrets.yaml file.
 api:
   encryption:
-    key: !secret api_encryption_key
+    key: !secret garage_keypad_api_encryption_key
 
 ota:
   - platform: esphome
