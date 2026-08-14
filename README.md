@@ -48,13 +48,15 @@ The following are the selected parts for the current build. Amazon links point t
 
 ### Reference images
 
+These are repository-local copies of the product images supplied for this build, so the README does not depend on external image hotlinks.
+
 #### S20-ID IP68 Wiegand keypad
 
-<a href="https://amzn.to/4zhUrBZ"><img src="https://esphome.io/images/wiegand.jpg" alt="S20-ID Wiegand keypad and RFID reader" width="260"></a>
+<a href="https://amzn.to/4zhUrBZ"><img src="docs/images/s20-id-keypad.jpg" alt="S20-ID Wiegand keypad and RFID reader" width="280"></a>
 
 #### ESP32S 30-pin USB-C board
 
-<a href="https://amzn.to/4wNM9PX"><img src="https://down-vn.img.susercontent.com/file/sg-11134201-7qven-ljgyfu3ej66q67" alt="ESP32S 30-pin USB-C ESP32-WROOM-32 development board" width="420"></a>
+<a href="https://amzn.to/4wNM9PX"><img src="docs/images/esp32s-30pin.jpg" alt="ESP32S 30-pin USB-C ESP32-WROOM-32 development board" width="260"></a>
 
 #### ESP32 screw-terminal expansion board
 
@@ -62,7 +64,7 @@ The following are the selected parts for the current build. Amazon links point t
 
 #### MEAN WELL HDR-30-12 power supply
 
-<a href="https://amzn.to/4zhTsSj"><img src="https://nowyelektronik.pl/img/p/3/4/7/6/7/7/347677-large_default.jpg" alt="MEAN WELL HDR-30-12 DIN rail power supply" width="360"></a>
+<a href="https://amzn.to/4zhTsSj"><img src="docs/images/meanwell-hdr-30-12.jpg" alt="MEAN WELL HDR-30-12 DIN rail power supply" width="280"></a>
 
 The firmware uses the classic `esp32` silicon variant directly. The onboard blue LED is connected to GPIO2 and is used as a firmware-controlled connection-status indicator.
 
@@ -76,7 +78,10 @@ GarageDoorWiegandKeypad/
 │   └── HiLetgo_Level_Shifter_DIN_CableClamp.scad
 ├── docs/
 │   └── images/
-│       └── esp32-terminal-board.jpg
+│       ├── esp32-terminal-board.jpg
+│       ├── esp32s-30pin.jpg
+│       ├── meanwell-hdr-30-12.jpg
+│       └── s20-id-keypad.jpg
 └── esphome/
     ├── garage-keypad.yaml
     ├── device-builder-wrapper.example.yaml
