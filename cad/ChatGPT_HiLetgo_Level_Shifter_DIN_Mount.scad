@@ -1,185 +1,238 @@
 // ChatGPT HiLetgo 4-channel BSS138 level-shifter DIN rail mount
-// Design version: 2
+// Design version: 3
 // VERSIONING RULE: Increment design_version by 1 for every repository check-in of this file.
-// Standard 35 mm x 7.5 mm top-hat DIN rail
-// Designed for the common tiny 4-channel BSS138 board sold by HiLetgo.
-// PCB dimensions based on customer Q&A: approximately 15.3 x 12.6 x 1.6 mm.
-// Measure your actual board and adjust pcb_x / pcb_y if needed before final printing.
+//
+// Design intent for v3:
+//   * One-piece, side-profile DIN clip inspired by common printable PCB DIN mounts.
+//   * Fixed DIN hook on one side + flexible snap hook on the other.
+//   * PCB slides into two edge channels; no screws and no enclosure around the board.
+//   * The model is a nearly constant cross-section, so it prints flat on its side with no supports.
+//
+// Standard rail: 35 mm x 7.5 mm top-hat DIN rail (EN 60715 / TH35-7.5).
+// PCB envelope supplied by customer Q&A: approximately 15.3 x 12.6 x 1.6 mm.
+// The 15.3 mm dimension is oriented ACROSS the DIN rail so the clips grip the two
+// short, unpopulated PCB edges. The two 6-pin solder/header rows remain exposed.
 
 $fn = 48;
 
 // ---------- VERSION ----------
-design_version = 2;  // Increment by 1 on every repository check-in
+design_version = 3;  // Increment by 1 on every repository check-in
+
+// ---------- OUTPUT / DEBUG ----------
+// true = exported STL is already laid on its broad side for support-free printing.
+// false = show the mount in its installed orientation.
+print_orientation = true;
+show_reference_pcb = false;  // useful only with print_orientation = false
+show_reference_din = false;  // useful only with print_orientation = false
 
 // ---------- PCB PARAMETERS ----------
-// HiLetgo board envelope from customer Q&A.
-pcb_x = 15.3;          // PCB width, mm (across the two pin rows)
-pcb_y = 12.6;          // PCB length, mm (along each 6-pin row)
-pcb_t = 1.6;           // PCB thickness
-pcb_clearance = 0.35;  // per side; increase to 0.45-0.55 for a looser fit
+pcb_x = 15.3;           // across DIN rail; clips grip the two short PCB edges
+pcb_y = 12.6;           // along DIN rail; pin rows are near these two edges
+pcb_t = 1.6;
+pcb_side_clearance = 0.25;  // per side in the slide channel
+pcb_z_clearance = 0.25;     // above PCB in the slide channel
+
+// The mount only grips the center portion of the PCB so the pin rows/solder joints
+// at both long edges remain unobstructed.
+mount_depth = 8.0;      // along DIN rail
+
+// PCB slide-channel geometry
+channel_wall_t = 1.6;
+lower_lip_overlap = 1.25;
+lower_lip_t = 1.20;
+upper_lip_overlap = 0.85;
+upper_lip_t = 0.90;
+under_pcb_gap = 1.35;   // clearance under the PCB center
 
 // ---------- DIN RAIL PARAMETERS ----------
 din_width = 35.0;
 din_height = 7.5;
-din_clearance = 0.35;
-rail_thickness_allowance = 1.4;
+din_thickness = 1.0;       // common steel TH35 rail thickness
+rail_side_clearance = 0.30;
 
-// ---------- PRINT / STRUCTURE PARAMETERS ----------
-mount_depth = 24;      // length along DIN rail
-base_width = 43;       // overall width across DIN rail
-base_t = 3.0;
-wall_t = 2.2;
-flex_t = 2.2;
-hook_drop = 6.0;
-hook_lip = 1.45;
-hook_lip_h = 1.45;
+// DIN clip geometry
+backplate_t = 3.0;
+fixed_hook_t = 2.2;
+spring_arm_t = 1.8;
+hook_overlap = 1.65;
+hook_t = 1.25;
+hook_extra_drop = 0.45;
 
-// PCB stand-off / clip geometry
-pcb_standoff = 2.4;
-pad = 3.0;
-clip_t = 1.6;
-clip_h_above_pcb = 1.6;
-clip_lip = 0.75;
-clip_lip_h = 0.8;
-side_guide_t = 1.2;
-side_guide_len = 4.0;
+// ---------- BODY PARAMETERS ----------
+// The body narrows toward the tiny PCB, but stays a simple 2D profile.
+body_shoulder_half_w = 16.4;
+body_neck_half_w = 9.4;
+body_neck_z = 8.8;
 
-// Coordinate system:
-// X = across DIN rail
-// Y = along DIN rail
-// Z = outward from rail / upward toward PCB
-eps = 0.15;
-rail_top_z = hook_drop;
-base_z0 = rail_top_z;
-base_z1 = base_z0 + base_t;
-pcb_bottom_z = base_z1 + pcb_standoff;
+// ---------- DERIVED DIMENSIONS ----------
+rail_half = din_width/2;
+rail_flange_top_z = -din_height;
+rail_flange_bottom_z = rail_flange_top_z - din_thickness;
+
+fixed_inner_x = -(rail_half + rail_side_clearance);
+fixed_outer_x = fixed_inner_x - fixed_hook_t;
+spring_inner_x = rail_half + rail_side_clearance;
+spring_outer_x = spring_inner_x + spring_arm_t;
+
+hook_top_z = rail_flange_bottom_z + 0.10;
+hook_bottom_z = hook_top_z - hook_t;
+arm_bottom_z = hook_bottom_z - hook_extra_drop;
+
+pcb_half = pcb_x/2;
+channel_inner_x = pcb_half + pcb_side_clearance;
+channel_outer_x = channel_inner_x + channel_wall_t;
+
+channel_base_z = body_neck_z + 0.55;
+pcb_bottom_z = channel_base_z + lower_lip_t;
 pcb_top_z = pcb_bottom_z + pcb_t;
+upper_lip_bottom_z = pcb_top_z + pcb_z_clearance;
+channel_top_z = upper_lip_bottom_z + upper_lip_t;
 
-module rounded_box(size=[10,10,2], r=1) {
-    // simple XY-rounded prism
-    linear_extrude(height=size[2], center=true)
-        offset(r=r)
-            offset(delta=-r)
-                square([size[0], size[1]], center=true);
+// ---------- 2D HELPERS ----------
+module rect2d(x0, x1, z0, z1) {
+    translate([x0, z0]) square([x1-x0, z1-z0], center=false);
 }
 
-module wedge_lip(x_sign=1, y_depth=mount_depth-4) {
-    // Chamfered inward lip for DIN rail insertion.
-    // x_sign = -1 left, +1 right.
-    lip_outer_x = x_sign * (din_width/2 + din_clearance + wall_t/2);
-    lip_inner_x = x_sign * (din_width/2 - hook_lip);
-    z0 = 0.35;
-    z1 = z0 + hook_lip_h;
-    z2 = z1 + 1.0;
+module body_profile_2d() {
+    // Rail contact/backplate.
+    rect2d(fixed_outer_x, spring_outer_x, 0, backplate_t);
 
-    // 2D polygon in X-Z, extruded in Y.
-    pts_right = [
-        [din_width/2 + din_clearance + wall_t, z0],
-        [din_width/2 - hook_lip, z0],
-        [din_width/2 - hook_lip, z1],
-        [din_width/2 + din_clearance + wall_t, z2]
-    ];
-    pts_left = [for (p=pts_right) [-p[0], p[1]]];
-    pts = (x_sign > 0) ? pts_right : pts_left;
+    // Tapered body up to the PCB holder. Since the complete part is printed on
+    // its side, these slopes do not create unsupported print overhangs.
+    polygon(points=[
+        [-body_shoulder_half_w, backplate_t],
+        [ body_shoulder_half_w, backplate_t],
+        [ body_neck_half_w, body_neck_z],
+        [-body_neck_half_w, body_neck_z]
+    ]);
 
-    rotate([90,0,0])
-        linear_extrude(height=y_depth, center=true)
-            polygon(points=pts);
+    // Short neck connecting the tapered body to the PCB channels.
+    rect2d(-body_neck_half_w, body_neck_half_w,
+           body_neck_z, channel_base_z + 0.15);
 }
 
-module din_clip() {
-    // Top/base plate that bears on the DIN rail.
-    translate([0,0,base_z0 + base_t/2])
-        rounded_box([base_width, mount_depth, base_t], 1.1);
+module fixed_din_hook_2d() {
+    // Rigid left wall.
+    rect2d(fixed_outer_x, fixed_inner_x, arm_bottom_z, backplate_t);
 
-    // Fixed hook, left side.
-    left_x = -(din_width/2 + din_clearance + wall_t/2);
-    translate([left_x, 0, (hook_drop+eps)/2])
-        cube([wall_t, mount_depth-4, hook_drop+eps], center=true);
-    wedge_lip(-1, mount_depth-4);
-
-    // Flexible snap arm, right side. Narrower Y span makes it easier to flex.
-    right_x = din_width/2 + din_clearance + flex_t/2;
-    flex_depth = mount_depth - 8;
-    translate([right_x, 0, (hook_drop+eps)/2])
-        cube([flex_t, flex_depth, hook_drop+eps], center=true);
-    wedge_lip(1, flex_depth);
-
-    // Small thumb tab on flexible side for removal with a screwdriver/finger.
-    translate([din_width/2 + din_clearance + flex_t + 1.8, 0, 2.6])
-        cube([3.6, 7.0, 1.8], center=true);
+    // Inward catch under the left DIN flange. The chamfer at the tip makes it
+    // easier to engage the fixed side before snapping the spring side down.
+    polygon(points=[
+        [fixed_inner_x, hook_top_z],
+        [fixed_inner_x + hook_overlap, hook_top_z],
+        [fixed_inner_x + hook_overlap - 0.35, hook_bottom_z],
+        [fixed_inner_x, hook_bottom_z]
+    ]);
 }
 
-module pcb_supports() {
-    ex = pcb_x/2 + pcb_clearance;
-    ey = pcb_y/2 + pcb_clearance;
+module spring_din_hook_2d() {
+    // Long, simple spring arm attached only at the backplate. This is the part
+    // that flexes outward while the mount is pushed onto the rail.
+    rect2d(spring_inner_x, spring_outer_x, arm_bottom_z, backplate_t);
 
-    // Four corner pads. They leave the pin rows / solder tails mostly unobstructed.
-    for (sx=[-1,1], sy=[-1,1]) {
-        translate([
-            sx*(ex - pad/2),
-            sy*(ey - pad/2),
-            base_z1 + (pcb_standoff+eps)/2 - eps
-        ])
-            cube([pad, pad, pcb_standoff+eps], center=true);
-    }
+    // Snap hook with a generous diagonal lead-in. The rail flange rides along
+    // the diagonal, pushes the arm outward, then the hook snaps underneath.
+    polygon(points=[
+        [spring_inner_x, hook_top_z + 1.65],
+        [spring_inner_x, hook_bottom_z],
+        [spring_inner_x - hook_overlap + 0.35, hook_bottom_z],
+        [spring_inner_x - hook_overlap, hook_top_z],
+        [spring_inner_x, hook_top_z + 1.65]
+    ]);
 
-    // Tiny side guides keep the PCB centered without blocking the pin rows.
+    // Small outward pry tab at the bottom for a flat screwdriver during removal.
+    polygon(points=[
+        [spring_outer_x, arm_bottom_z + 0.15],
+        [spring_outer_x + 3.0, arm_bottom_z + 0.15],
+        [spring_outer_x + 3.0, arm_bottom_z + 1.55],
+        [spring_outer_x, arm_bottom_z + 1.05]
+    ]);
+}
+
+module pcb_channels_2d() {
+    // Left and right channels are mirror images. The PCB slides in from either
+    // end along Y; there are no snap tabs to fight and no hardware required.
     for (sx=[-1,1]) {
-        guide_h = pcb_standoff + 1.6 + eps;
-        translate([
-            sx*(ex + side_guide_t/2),
-            0,
-            base_z1 + guide_h/2 - eps
-        ])
-            cube([side_guide_t, side_guide_len, guide_h], center=true);
+        // Vertical outside wall.
+        x0 = sx < 0 ? -channel_outer_x : channel_inner_x;
+        x1 = sx < 0 ? -channel_inner_x : channel_outer_x;
+        rect2d(x0, x1, channel_base_z, channel_top_z);
+
+        // Lower support ledge: only the outer edge of the PCB is supported,
+        // leaving the board center and bottom-side soldering clear.
+        lx0 = sx < 0 ? -channel_inner_x : channel_inner_x - lower_lip_overlap;
+        lx1 = sx < 0 ? -channel_inner_x + lower_lip_overlap : channel_inner_x;
+        rect2d(lx0, lx1, channel_base_z, pcb_bottom_z);
+
+        // Upper retaining lip.
+        ux0 = sx < 0 ? -channel_inner_x : channel_inner_x - upper_lip_overlap;
+        ux1 = sx < 0 ? -channel_inner_x + upper_lip_overlap : channel_inner_x;
+        rect2d(ux0, ux1, upper_lip_bottom_z, channel_top_z);
+    }
+
+    // Two tiny feet connect the edge channels to the neck while preserving most
+    // of the under-PCB air gap.
+    foot_w = 2.2;
+    for (sx=[-1,1]) {
+        cx = sx * (channel_inner_x - lower_lip_overlap/2);
+        rect2d(cx-foot_w/2, cx+foot_w/2,
+               body_neck_z, channel_base_z + 0.10);
     }
 }
 
-module pcb_end_clip(y_sign=1) {
-    ex = pcb_x/2 + pcb_clearance;
-    ey = pcb_y/2 + pcb_clearance;
-
-    // Flexible end wall: PCB goes under one lip, then snaps under the other.
-    y_wall = y_sign * (ey + clip_t/2);
-    wall_h = pcb_standoff + pcb_t + clip_h_above_pcb;
-    translate([0, y_wall, base_z1 + wall_h/2 - eps/2])
-        cube([pcb_x + 2*pcb_clearance + 3.0, clip_t, wall_h+eps], center=true);
-
-    // Inward retaining lip at the top.
-    lip_y = y_sign * (ey - clip_lip/2);
-    translate([0, lip_y, pcb_top_z + clip_lip_h/2])
-        cube([pcb_x + 2*pcb_clearance + 2.4, clip_lip, clip_lip_h], center=true);
-
-    // Lead-in chamfer / ramp above the lip to make insertion easier.
-    ramp_depth = 1.4;
-    ramp_h = 1.1;
-    hull() {
-        translate([0,
-                   y_sign*(ey + 0.05),
-                   pcb_top_z + clip_lip_h])
-            cube([pcb_x + 2*pcb_clearance + 2.4, 0.25, 0.25], center=true);
-        translate([0,
-                   y_sign*(ey + ramp_depth),
-                   pcb_top_z + clip_lip_h + ramp_h])
-            cube([pcb_x + 2*pcb_clearance + 2.4, 0.25, 0.25], center=true);
-    }
-}
-
-module pcb_cradle() {
-    pcb_supports();
-    pcb_end_clip(-1);
-    pcb_end_clip(1);
-}
-
-module mount() {
+module mount_profile_2d() {
     union() {
-        din_clip();
-        pcb_cradle();
+        body_profile_2d();
+        fixed_din_hook_2d();
+        spring_din_hook_2d();
+        pcb_channels_2d();
     }
 }
 
-mount();
+module mount_installed_orientation() {
+    // Extruding a single side profile is the key to the easy-print design.
+    rotate([90,0,0])
+        linear_extrude(height=mount_depth, center=true, convexity=10)
+            mount_profile_2d();
+}
 
-// Uncomment to visualize a translucent PCB in OpenSCAD preview:
-// %translate([0,0,pcb_bottom_z + pcb_t/2]) cube([pcb_x, pcb_y, pcb_t], center=true);
+module reference_pcb() {
+    color([0.05,0.35,0.65,0.45])
+        translate([0,0,pcb_bottom_z + pcb_t/2])
+            cube([pcb_x, pcb_y, pcb_t], center=true);
+}
+
+module reference_din() {
+    // Simplified TH35-7.5 reference rail for fit visualization only.
+    // 35 mm overall width, 27 mm crown width, 7.5 mm height, 1 mm material.
+    crown_half = 13.5;
+    rail_len = mount_depth + 12;
+    color([0.55,0.55,0.55,0.35])
+    rotate([90,0,0])
+        linear_extrude(height=rail_len, center=true)
+            polygon(points=[
+                [-crown_half, 0], [ crown_half, 0],
+                [ rail_half, rail_flange_top_z],
+                [ rail_half, rail_flange_bottom_z],
+                [ crown_half-0.8, rail_flange_top_z+0.15],
+                [-crown_half+0.8, rail_flange_top_z+0.15],
+                [-rail_half, rail_flange_bottom_z],
+                [-rail_half, rail_flange_top_z]
+            ]);
+}
+
+module final_model() {
+    if (print_orientation) {
+        // Put one broad X-Z side directly on the print bed. The spring flexes in
+        // the layer plane, which is both strong and support-free.
+        translate([0,0,mount_depth/2])
+            rotate([90,0,0])
+                mount_installed_orientation();
+    } else {
+        mount_installed_orientation();
+        if (show_reference_pcb) reference_pcb();
+        if (show_reference_din) reference_din();
+    }
+}
+
+final_model();
