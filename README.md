@@ -14,6 +14,7 @@ The current firmware provides the secure connectivity and recovery foundation fo
 - Fallback Wi-Fi access point with its own password
 - GPIO2 blue connection-status LED with distinct Wi-Fi and Home Assistant states
 - Explicit Home Assistant API-client tracking so ESPHome log viewers do not affect the LED state
+- API client identity/address logging on connect and disconnect for diagnostics
 - Wi-Fi signal sensor
 - Uptime sensor
 - IP address, SSID, and MAC address reporting
@@ -147,6 +148,19 @@ The firmware configures the onboard blue/user LED on **GPIO2** as an internal co
 Home Assistant connection state is tracked from ESPHome's API `on_client_connected` and `on_client_disconnected` events. Only clients whose reported `client_info` begins with `Home Assistant ` count toward the solid-blue state. This intentionally prevents opening or closing the ESPHome Device Builder log viewer from changing the LED indication.
 
 An earlier implementation used `api.connected` with `state_subscription_only: true`. Although ESPHome documents that option as filtering logger-only clients, testing on this device showed that the Device Builder log screen could still affect the LED state, so the firmware now identifies Home Assistant explicitly by client name.
+
+## API client diagnostics
+
+Every ESPHome native-API client connection and disconnection is logged with the reported `client_info` and remote address. This is specifically intended to verify the exact client name Home Assistant presents to the device and to distinguish it from ESPHome Device Builder/log clients.
+
+Example log messages:
+
+```text
+[api_client] Connected: client_info='Home Assistant 2026.x.x' address='10.0.0.x'
+[api_client] Disconnected: client_info='Home Assistant 2026.x.x' address='10.0.0.x'
+```
+
+These messages do not include the Noise PSK, Wi-Fi password, keypad credentials, or other application payload data.
 
 ## Next steps
 
