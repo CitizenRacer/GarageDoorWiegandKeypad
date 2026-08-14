@@ -1,6 +1,6 @@
 # Garage Door Keypad
 
-ESPHome firmware for a classic ESP32-based garage door keypad controller. The detected SoC is an **ESP32-D0WD-V3**.
+ESPHome firmware for a classic ESP32-based garage door keypad controller. The board is sold by Aideepen as an **ESP32S 30-pin USB-C NodeMCU development board with ESP32-WROOM-32 and CP2102** (Amazon ASIN `B0DNYR973V`). The detected SoC is an **ESP32-D0WD-V3**.
 
 The current firmware is intentionally minimal. It is meant to verify that the ESP32 is alive, connected to Wi-Fi, visible to Home Assistant, and ready for wireless OTA updates before the keypad hardware is connected.
 
@@ -18,12 +18,18 @@ The current firmware is intentionally minimal. It is meant to verify that the ES
 
 ## Hardware
 
-- ESP32 with ESP32-D0WD-V3 SoC
+- Aideepen ESP32S 30-pin USB-C NodeMCU development board
+  - ESP32-WROOM-32 module
+  - ESP32-D0WD-V3 SoC
+  - CP2102 USB-to-serial interface
+  - USB-C connector
+  - 30-pin layout
+  - Amazon ASIN `B0DNYR973V`
 - Garage keypad/access controller — not connected yet
 - 12 V project power supply
 - 12 V to 5 V DC converter for the ESP32
 
-The exact ESP32 development-board model has not yet been identified, so the firmware deliberately does not assume an onboard LED, PSRAM, flash size, or board-specific GPIO mapping. ESPHome is configured using the `esp32` silicon variant directly.
+The firmware uses the classic `esp32` silicon variant directly. It does not currently depend on board-specific peripherals or GPIO assumptions.
 
 ## Repository structure
 
@@ -41,11 +47,12 @@ GarageDoorKeypad/
 1. Copy `esphome/secrets.example.yaml` to `esphome/secrets.yaml`.
 2. Fill in your Wi-Fi and password values in `secrets.yaml`.
 3. Add `garage-keypad.yaml` to ESPHome Device Builder or compile it with ESPHome.
-4. Connect the ESP32 by USB and perform the first installation over USB.
-5. If the board is stuck in an `invalid header` boot loop from a previous incorrect image, erase the flash first, then install the new firmware over USB.
-6. After it boots, verify that it connects to Wi-Fi and appears in ESPHome/Home Assistant.
-7. Open `http://garage-keypad.local` or use the IP address shown by ESPHome.
-8. Future firmware installations can be performed wirelessly with ESPHome OTA.
+4. When ESPHome Device Builder asks for the board family, choose **ESP32** (classic ESP32), not ESP32-S2/S3/C3/C6.
+5. Connect the ESP32 by USB-C and perform the first installation over USB.
+6. If the board is stuck in an `invalid header` boot loop from a previous incorrect image, erase the flash first, then install the new firmware over USB.
+7. After it boots, verify that it connects to Wi-Fi and appears in ESPHome/Home Assistant.
+8. Open `http://garage-keypad.local` or use the IP address shown by ESPHome.
+9. Future firmware installations can be performed wirelessly with ESPHome OTA.
 
 ## ESP32 target
 
@@ -64,7 +71,7 @@ esp32:
     type: esp-idf
 ```
 
-ESPHome recommends using the silicon `variant` directly when a specific development-board definition is not required. This also avoids making unsupported assumptions about board-specific peripherals.
+Using the silicon variant directly avoids unnecessary board-specific assumptions while remaining correct for this ESP32-WROOM-32 development board.
 
 ## Secrets
 
@@ -79,9 +86,13 @@ ota_password: "YOUR_OTA_PASSWORD"
 fallback_ap_password: "YOUR_FALLBACK_AP_PASSWORD"
 ```
 
-## Status indication
+## Onboard LEDs
 
-No onboard LED is currently configured. The previously assumed ESP32-S3 SuperMini WS2812 on GPIO48 was incorrect for this hardware and has been removed. Until the exact development-board model is identified, device health should be verified through serial logs, the ESPHome API, the web interface, uptime, and Wi-Fi signal reporting.
+A red LED has been observed illuminated whenever the board is powered. On this style of 30-pin ESP32 development board, the red LED is the power indicator and is not intended as a software-controlled status LED.
+
+Many 30-pin ESP32-WROOM-32 development boards also provide a programmable blue/user LED connected to GPIO2. The exact Aideepen product listing does not explicitly document that connection, so GPIO2 is **not currently configured as an LED in the firmware**. It can be tested later without making the firmware depend on it.
+
+Device health should currently be verified through serial logs, the ESPHome API, the web interface, uptime, and Wi-Fi signal reporting.
 
 ## Next steps
 
