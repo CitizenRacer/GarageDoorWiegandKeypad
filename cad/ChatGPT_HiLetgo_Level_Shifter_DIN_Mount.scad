@@ -1,238 +1,534 @@
 // ChatGPT HiLetgo 4-channel BSS138 level-shifter DIN rail mount
-// Design version: 3
+// Design version: 4
 // VERSIONING RULE: Increment design_version by 1 for every repository check-in of this file.
 //
-// Design intent for v3:
-//   * One-piece, side-profile DIN clip inspired by common printable PCB DIN mounts.
-//   * Fixed DIN hook on one side + flexible snap hook on the other.
-//   * PCB slides into two edge channels; no screws and no enclosure around the board.
-//   * The model is a nearly constant cross-section, so it prints flat on its side with no supports.
+// The DIN-rail spring geometry below is embedded directly from the STL supplied
+// by the user. Its shape is preserved exactly; the only new geometry is the
+// compact HiLetgo PCB snap cradle joined to its center.
 //
-// Standard rail: 35 mm x 7.5 mm top-hat DIN rail (EN 60715 / TH35-7.5).
-// PCB envelope supplied by customer Q&A: approximately 15.3 x 12.6 x 1.6 mm.
-// The 15.3 mm dimension is oriented ACROSS the DIN rail so the clips grip the two
-// short, unpopulated PCB edges. The two 6-pin solder/header rows remain exposed.
+// HiLetgo PCB envelope used here: approximately 15.3 x 12.6 x 1.6 mm.
 
 $fn = 48;
+design_version = 4;
+print_orientation = true;  // true = broad side on build plate for support-free printing
 
-// ---------- VERSION ----------
-design_version = 3;  // Increment by 1 on every repository check-in
-
-// ---------- OUTPUT / DEBUG ----------
-// true = exported STL is already laid on its broad side for support-free printing.
-// false = show the mount in its installed orientation.
-print_orientation = true;
-show_reference_pcb = false;  // useful only with print_orientation = false
-show_reference_din = false;  // useful only with print_orientation = false
-
-// ---------- PCB PARAMETERS ----------
-pcb_x = 15.3;           // across DIN rail; clips grip the two short PCB edges
-pcb_y = 12.6;           // along DIN rail; pin rows are near these two edges
+// ---------- PCB ----------
+pcb_x = 15.3;           // long dimension; cradle grips these two ends
+pcb_y = 12.6;           // pin-row edges overhang the narrow cradle in Y
 pcb_t = 1.6;
-pcb_side_clearance = 0.25;  // per side in the slide channel
-pcb_z_clearance = 0.25;     // above PCB in the slide channel
+pcb_xy_clearance = 0.35;
+pcb_z_clearance = 0.20;
 
-// The mount only grips the center portion of the PCB so the pin rows/solder joints
-// at both long edges remain unobstructed.
-mount_depth = 8.0;      // along DIN rail
+// ---------- CRADLE ----------
+clip_center_y = 5.0;
+cradle_depth_y = 8.0;   // clip itself is 10 mm wide along the DIN rail
+wall_t = 1.5;
+ledge_inset = 1.55;
+ledge_t = 1.2;
+lip_inset = 0.85;
+lip_t = 0.9;
+ramp_out = 1.0;
+ramp_depth = 1.1;
 
-// PCB slide-channel geometry
-channel_wall_t = 1.6;
-lower_lip_overlap = 1.25;
-lower_lip_t = 1.20;
-upper_lip_overlap = 0.85;
-upper_lip_t = 0.90;
-under_pcb_gap = 1.35;   // clearance under the PCB center
+// The source spring engages the rail on +Z, so the PCB faces outward toward -Z.
+pcb_inner_z = -7.40;
+pcb_outer_z = pcb_inner_z - pcb_t;
+lip_inner_z = pcb_outer_z - pcb_z_clearance;
 
-// ---------- DIN RAIL PARAMETERS ----------
-din_width = 35.0;
-din_height = 7.5;
-din_thickness = 1.0;       // common steel TH35 rail thickness
-rail_side_clearance = 0.30;
+// Compact neck attaches only to the center of the supplied spring so its
+// outer spring arms and DIN hooks remain unchanged.
+neck_x = 8.0;
+neck_y = 8.0;
+neck_z_top = -3.20;
+neck_z_bottom = -6.45;
 
-// DIN clip geometry
-backplate_t = 3.0;
-fixed_hook_t = 2.2;
-spring_arm_t = 1.8;
-hook_overlap = 1.65;
-hook_t = 1.25;
-hook_extra_drop = 0.45;
-
-// ---------- BODY PARAMETERS ----------
-// The body narrows toward the tiny PCB, but stays a simple 2D profile.
-body_shoulder_half_w = 16.4;
-body_neck_half_w = 9.4;
-body_neck_z = 8.8;
-
-// ---------- DERIVED DIMENSIONS ----------
-rail_half = din_width/2;
-rail_flange_top_z = -din_height;
-rail_flange_bottom_z = rail_flange_top_z - din_thickness;
-
-fixed_inner_x = -(rail_half + rail_side_clearance);
-fixed_outer_x = fixed_inner_x - fixed_hook_t;
-spring_inner_x = rail_half + rail_side_clearance;
-spring_outer_x = spring_inner_x + spring_arm_t;
-
-hook_top_z = rail_flange_bottom_z + 0.10;
-hook_bottom_z = hook_top_z - hook_t;
-arm_bottom_z = hook_bottom_z - hook_extra_drop;
-
-pcb_half = pcb_x/2;
-channel_inner_x = pcb_half + pcb_side_clearance;
-channel_outer_x = channel_inner_x + channel_wall_t;
-
-channel_base_z = body_neck_z + 0.55;
-pcb_bottom_z = channel_base_z + lower_lip_t;
-pcb_top_z = pcb_bottom_z + pcb_t;
-upper_lip_bottom_z = pcb_top_z + pcb_z_clearance;
-channel_top_z = upper_lip_bottom_z + upper_lip_t;
-
-// ---------- 2D HELPERS ----------
-module rect2d(x0, x1, z0, z1) {
-    translate([x0, z0]) square([x1-x0, z1-z0], center=false);
+// ---------- EMBEDDED SOURCE DIN SPRING ----------
+// Exact triangle mesh from the user-supplied din_rail_spring_with_hole.stl.
+module source_din_clip() {
+    polyhedron(
+        points=[
+    [2.120677, 4.646122, -6.416352],
+    [2.120677, 4.646122, -3.416352],
+    [2.15, 5, -6.416352],
+    [2.15, 5, -3.416352],
+    [2.120677, 5.353878, -6.416352],
+    [2.120677, 5.353878, -3.416352],
+    [2.033507, 5.698104, -6.416352],
+    [2.033507, 5.698104, -3.416352],
+    [1.890869, 6.023287, -6.416352],
+    [1.890869, 6.023287, -3.416352],
+    [1.696652, 6.320557, -6.416352],
+    [1.696652, 6.320557, -3.416352],
+    [1.456155, 6.581806, -6.416352],
+    [1.456155, 6.581806, -3.416352],
+    [1.175938, 6.799908, -6.416352],
+    [1.175938, 6.799908, -3.416352],
+    [0.863645, 6.968913, -6.416352],
+    [0.863645, 6.968913, -3.416352],
+    [0.527794, 7.08421, -6.416352],
+    [0.527794, 7.08421, -3.416352],
+    [0.177546, 7.142657, -6.416352],
+    [0.177546, 7.142657, -3.416352],
+    [-0.177546, 7.142657, -6.416352],
+    [-0.177546, 7.142657, -3.416352],
+    [-0.527794, 7.08421, -6.416352],
+    [-0.527794, 7.08421, -3.416352],
+    [-0.863645, 6.968913, -6.416352],
+    [-0.863645, 6.968913, -3.416352],
+    [-1.175938, 6.799908, -6.416352],
+    [-1.175938, 6.799908, -3.416352],
+    [-1.456155, 6.581806, -6.416352],
+    [-1.456155, 6.581806, -3.416352],
+    [-1.696652, 6.320557, -6.416352],
+    [-1.696652, 6.320557, -3.416352],
+    [-1.890869, 6.023287, -6.416352],
+    [-1.890869, 6.023287, -3.416352],
+    [-2.033507, 5.698104, -6.416352],
+    [-2.033507, 5.698104, -3.416352],
+    [-2.120677, 5.353878, -6.416352],
+    [-2.120677, 5.353878, -3.416352],
+    [-2.15, 5, -6.416352],
+    [-2.15, 5, -3.416352],
+    [-2.120677, 4.646122, -6.416352],
+    [-2.120677, 4.646122, -3.416352],
+    [-2.033507, 4.301896, -6.416352],
+    [-2.033507, 4.301896, -3.416352],
+    [-1.890869, 3.976713, -6.416352],
+    [-1.890869, 3.976713, -3.416352],
+    [-1.696652, 3.679443, -6.416352],
+    [-1.696652, 3.679443, -3.416352],
+    [-1.456155, 3.418194, -6.416352],
+    [-1.456155, 3.418194, -3.416352],
+    [-1.175938, 3.200092, -6.416352],
+    [-1.175938, 3.200092, -3.416352],
+    [-0.863645, 3.031087, -6.416352],
+    [-0.863645, 3.031087, -3.416352],
+    [-0.527794, 2.915789, -6.416352],
+    [-0.527794, 2.915789, -3.416352],
+    [-0.177546, 2.857343, -6.416352],
+    [-0.177546, 2.857343, -3.416352],
+    [0.177546, 2.857343, -6.416352],
+    [0.177546, 2.857343, -3.416352],
+    [0.527794, 2.915789, -6.416352],
+    [0.527794, 2.915789, -3.416352],
+    [0.863645, 3.031087, -6.416352],
+    [0.863645, 3.031087, -3.416352],
+    [1.175938, 3.200092, -6.416352],
+    [1.175938, 3.200092, -3.416352],
+    [1.456155, 3.418194, -6.416352],
+    [1.456155, 3.418194, -3.416352],
+    [1.696652, 3.679443, -6.416352],
+    [1.696652, 3.679443, -3.416352],
+    [1.890869, 3.976713, -6.416352],
+    [1.890869, 3.976713, -3.416352],
+    [2.033507, 4.301896, -6.416352],
+    [2.033507, 4.301896, -3.416352],
+    [21.25, 10, -6.416352],
+    [22.25, 10, -5.416352],
+    [21.25, 0, -6.416352],
+    [22.25, 0, -5.416352],
+    [-21.25, 0, -6.416352],
+    [-21.25, 10, -6.416352],
+    [5, 0, -3.416352],
+    [-5, 0, -3.416352],
+    [-22.25, 0, -5.416352],
+    [-17.75, 0, -0],
+    [-22.25, 0, 3.5],
+    [-17.75, 0, 1.5],
+    [-16.25, 0, 2.5],
+    [17.75, 0, 0],
+    [22.25, 0, 3.5],
+    [17.75, 0, 1.5],
+    [16.25, 0, 2.5],
+    [19.25, 0, 3.5],
+    [-19.25, 0, 3.5],
+    [-22.25, 10, -5.416352],
+    [5, 7, -3.416352],
+    [22.25, 7, -3.416352],
+    [14.330127, 7, -0.916352],
+    [22.25, 7, -0.916352],
+    [14.330127, 3, -0.916352],
+    [22.25, 3, -0.916352],
+    [5, 3, -3.416352],
+    [22.25, 3, -3.416352],
+    [5, 10, -3.416352],
+    [-5, 10, -3.416352],
+    [-5, 3, -3.416352],
+    [-22.25, 3, -3.416352],
+    [-22.25, 7, -3.416352],
+    [-5, 7, -3.416352],
+    [-14.330127, 7, -0.916352],
+    [-14.330127, 3, -0.916352],
+    [-22.25, 7, -0.916352],
+    [-22.25, 3, -0.916352],
+    [-17.75, 10, -0],
+    [-22.25, 10, 3.5],
+    [-19.25, 10, 3.5],
+    [22.25, 10, 3.5],
+    [19.25, 10, 3.5],
+    [16.25, 10, 2.5],
+    [17.75, 10, 1.5],
+    [17.75, 10, 0],
+    [-17.75, 10, 1.5],
+    [-16.25, 10, 2.5]
+        ],
+        faces=[
+    [0, 1, 2],
+    [2, 1, 3],
+    [2, 3, 4],
+    [4, 3, 5],
+    [4, 5, 6],
+    [6, 5, 7],
+    [6, 7, 8],
+    [8, 7, 9],
+    [8, 9, 10],
+    [10, 9, 11],
+    [10, 11, 12],
+    [12, 11, 13],
+    [12, 13, 14],
+    [14, 13, 15],
+    [14, 15, 16],
+    [16, 15, 17],
+    [16, 17, 18],
+    [18, 17, 19],
+    [18, 19, 20],
+    [20, 19, 21],
+    [20, 21, 22],
+    [22, 21, 23],
+    [22, 23, 24],
+    [24, 23, 25],
+    [24, 25, 26],
+    [26, 25, 27],
+    [26, 27, 28],
+    [28, 27, 29],
+    [28, 29, 30],
+    [30, 29, 31],
+    [30, 31, 32],
+    [32, 31, 33],
+    [32, 33, 34],
+    [34, 33, 35],
+    [34, 35, 36],
+    [36, 35, 37],
+    [36, 37, 38],
+    [38, 37, 39],
+    [38, 39, 40],
+    [40, 39, 41],
+    [40, 41, 42],
+    [42, 41, 43],
+    [42, 43, 44],
+    [44, 43, 45],
+    [44, 45, 46],
+    [46, 45, 47],
+    [46, 47, 48],
+    [48, 47, 49],
+    [48, 49, 50],
+    [50, 49, 51],
+    [50, 51, 52],
+    [52, 51, 53],
+    [52, 53, 54],
+    [54, 53, 55],
+    [54, 55, 56],
+    [56, 55, 57],
+    [56, 57, 58],
+    [58, 57, 59],
+    [58, 59, 60],
+    [60, 59, 61],
+    [60, 61, 62],
+    [62, 61, 63],
+    [62, 63, 64],
+    [64, 63, 65],
+    [64, 65, 66],
+    [66, 65, 67],
+    [66, 67, 68],
+    [68, 67, 69],
+    [68, 69, 70],
+    [70, 69, 71],
+    [70, 71, 72],
+    [72, 71, 73],
+    [72, 73, 74],
+    [74, 73, 75],
+    [74, 75, 0],
+    [0, 75, 1],
+    [76, 77, 78],
+    [78, 77, 79],
+    [4, 76, 2],
+    [2, 76, 78],
+    [2, 78, 0],
+    [0, 78, 74],
+    [74, 78, 72],
+    [72, 78, 70],
+    [70, 78, 68],
+    [68, 78, 66],
+    [66, 78, 64],
+    [64, 78, 62],
+    [62, 78, 60],
+    [60, 78, 80],
+    [60, 80, 58],
+    [58, 80, 56],
+    [56, 80, 54],
+    [54, 80, 52],
+    [52, 80, 50],
+    [50, 80, 48],
+    [48, 80, 46],
+    [46, 80, 44],
+    [44, 80, 42],
+    [42, 80, 40],
+    [40, 80, 81],
+    [40, 81, 38],
+    [38, 81, 36],
+    [36, 81, 34],
+    [34, 81, 32],
+    [32, 81, 30],
+    [30, 81, 28],
+    [28, 81, 26],
+    [26, 81, 24],
+    [24, 81, 22],
+    [22, 81, 76],
+    [22, 76, 20],
+    [20, 76, 18],
+    [18, 76, 16],
+    [16, 76, 14],
+    [14, 76, 12],
+    [12, 76, 10],
+    [10, 76, 8],
+    [8, 76, 6],
+    [6, 76, 4],
+    [79, 82, 78],
+    [78, 82, 83],
+    [78, 83, 80],
+    [80, 83, 84],
+    [84, 83, 85],
+    [84, 85, 86],
+    [86, 85, 87],
+    [86, 87, 88],
+    [82, 79, 89],
+    [89, 79, 90],
+    [89, 90, 91],
+    [91, 90, 92],
+    [92, 90, 93],
+    [88, 94, 86],
+    [95, 81, 84],
+    [84, 81, 80],
+    [96, 97, 98],
+    [98, 97, 99],
+    [100, 98, 101],
+    [101, 98, 99],
+    [102, 100, 103],
+    [103, 100, 101],
+    [1, 103, 3],
+    [3, 103, 97],
+    [3, 97, 5],
+    [5, 97, 96],
+    [5, 96, 7],
+    [7, 96, 9],
+    [9, 96, 11],
+    [11, 96, 13],
+    [13, 96, 15],
+    [15, 96, 17],
+    [17, 96, 19],
+    [19, 96, 21],
+    [21, 96, 104],
+    [21, 104, 105],
+    [103, 1, 102],
+    [102, 1, 75],
+    [102, 75, 73],
+    [73, 71, 102],
+    [102, 71, 69],
+    [102, 69, 67],
+    [67, 65, 102],
+    [102, 65, 63],
+    [102, 63, 61],
+    [102, 61, 82],
+    [82, 61, 59],
+    [82, 59, 83],
+    [83, 59, 106],
+    [106, 59, 57],
+    [106, 57, 55],
+    [55, 53, 106],
+    [106, 53, 51],
+    [106, 51, 49],
+    [49, 47, 106],
+    [106, 47, 45],
+    [106, 45, 43],
+    [106, 43, 107],
+    [107, 43, 41],
+    [107, 41, 108],
+    [108, 41, 39],
+    [108, 39, 109],
+    [109, 39, 37],
+    [109, 37, 35],
+    [35, 33, 109],
+    [109, 33, 31],
+    [109, 31, 29],
+    [29, 27, 109],
+    [109, 27, 25],
+    [109, 25, 23],
+    [109, 23, 105],
+    [105, 23, 21],
+    [110, 111, 112],
+    [112, 111, 113],
+    [109, 110, 108],
+    [108, 110, 112],
+    [106, 107, 111],
+    [111, 107, 113],
+    [106, 111, 83],
+    [83, 111, 85],
+    [85, 111, 110],
+    [85, 110, 114],
+    [114, 110, 105],
+    [105, 110, 109],
+    [86, 94, 115],
+    [115, 94, 116],
+    [84, 108, 95],
+    [95, 108, 112],
+    [95, 112, 115],
+    [115, 112, 86],
+    [86, 112, 113],
+    [86, 113, 84],
+    [84, 113, 107],
+    [84, 107, 108],
+    [77, 97, 79],
+    [79, 97, 103],
+    [79, 103, 101],
+    [97, 77, 99],
+    [99, 77, 117],
+    [99, 117, 90],
+    [99, 90, 101],
+    [101, 90, 79],
+    [93, 90, 118],
+    [118, 90, 117],
+    [92, 93, 119],
+    [119, 93, 118],
+    [91, 92, 120],
+    [120, 92, 119],
+    [89, 91, 121],
+    [121, 91, 120],
+    [102, 82, 100],
+    [100, 82, 89],
+    [100, 89, 98],
+    [98, 89, 121],
+    [98, 121, 104],
+    [104, 96, 98],
+    [87, 85, 122],
+    [122, 85, 114],
+    [88, 87, 123],
+    [123, 87, 122],
+    [94, 88, 116],
+    [116, 88, 123],
+    [76, 104, 77],
+    [77, 104, 121],
+    [77, 121, 117],
+    [117, 121, 120],
+    [117, 120, 119],
+    [76, 81, 104],
+    [104, 81, 105],
+    [105, 81, 95],
+    [105, 95, 114],
+    [114, 95, 115],
+    [114, 115, 122],
+    [122, 115, 123],
+    [123, 115, 116],
+    [119, 118, 117]
+        ],
+        convexity=10
+    );
 }
 
-module body_profile_2d() {
-    // Rail contact/backplate.
-    rect2d(fixed_outer_x, spring_outer_x, 0, backplate_t);
-
-    // Tapered body up to the PCB holder. Since the complete part is printed on
-    // its side, these slopes do not create unsupported print overhangs.
-    polygon(points=[
-        [-body_shoulder_half_w, backplate_t],
-        [ body_shoulder_half_w, backplate_t],
-        [ body_neck_half_w, body_neck_z],
-        [-body_neck_half_w, body_neck_z]
-    ]);
-
-    // Short neck connecting the tapered body to the PCB channels.
-    rect2d(-body_neck_half_w, body_neck_half_w,
-           body_neck_z, channel_base_z + 0.15);
+module center_neck() {
+    translate([0, clip_center_y, (neck_z_top + neck_z_bottom)/2])
+        cube([neck_x, neck_y, neck_z_top - neck_z_bottom], center=true);
 }
 
-module fixed_din_hook_2d() {
-    // Rigid left wall.
-    rect2d(fixed_outer_x, fixed_inner_x, arm_bottom_z, backplate_t);
+// One flexible PCB end wall. sx=-1 left, sx=+1 right.
+// The wall, ledge, retaining lip, and lead-in ramp form a simple side profile
+// extruded along Y, making the complete mount easy to print on either Y face.
+module pcb_snap_wall(sx=1) {
+    // Flexible wall beside the PCB end.
+    translate([
+        sx * (pcb_x/2 + pcb_xy_clearance + wall_t/2),
+        clip_center_y,
+        (neck_z_bottom + lip_inner_z - lip_t)/2
+    ])
+        cube([
+            wall_t,
+            cradle_depth_y,
+            abs((lip_inner_z - lip_t) - neck_z_bottom)
+        ], center=true);
 
-    // Inward catch under the left DIN flange. The chamfer at the tip makes it
-    // easier to engage the fixed side before snapping the spring side down.
-    polygon(points=[
-        [fixed_inner_x, hook_top_z],
-        [fixed_inner_x + hook_overlap, hook_top_z],
-        [fixed_inner_x + hook_overlap - 0.35, hook_bottom_z],
-        [fixed_inner_x, hook_bottom_z]
-    ]);
-}
+    // Rail-facing ledge supporting the PCB underside/end.
+    translate([
+        sx * (pcb_x/2 + pcb_xy_clearance - ledge_inset/2),
+        clip_center_y,
+        pcb_inner_z + ledge_t/2
+    ])
+        cube([ledge_inset, cradle_depth_y, ledge_t], center=true);
 
-module spring_din_hook_2d() {
-    // Long, simple spring arm attached only at the backplate. This is the part
-    // that flexes outward while the mount is pushed onto the rail.
-    rect2d(spring_inner_x, spring_outer_x, arm_bottom_z, backplate_t);
+    // Small inward lip retaining the PCB after it snaps into place.
+    translate([
+        sx * (pcb_x/2 + pcb_xy_clearance - lip_inset/2),
+        clip_center_y,
+        lip_inner_z - lip_t/2
+    ])
+        cube([lip_inset, cradle_depth_y, lip_t], center=true);
 
-    // Snap hook with a generous diagonal lead-in. The rail flange rides along
-    // the diagonal, pushes the arm outward, then the hook snaps underneath.
-    polygon(points=[
-        [spring_inner_x, hook_top_z + 1.65],
-        [spring_inner_x, hook_bottom_z],
-        [spring_inner_x - hook_overlap + 0.35, hook_bottom_z],
-        [spring_inner_x - hook_overlap, hook_top_z],
-        [spring_inner_x, hook_top_z + 1.65]
-    ]);
+    // Chamfered lead-in ramp so the PCB can be pressed straight into the clip.
+    hull() {
+        translate([
+            sx * (pcb_x/2 + pcb_xy_clearance - 0.05),
+            clip_center_y,
+            lip_inner_z - lip_t
+        ])
+            cube([0.20, cradle_depth_y, 0.20], center=true);
 
-    // Small outward pry tab at the bottom for a flat screwdriver during removal.
-    polygon(points=[
-        [spring_outer_x, arm_bottom_z + 0.15],
-        [spring_outer_x + 3.0, arm_bottom_z + 0.15],
-        [spring_outer_x + 3.0, arm_bottom_z + 1.55],
-        [spring_outer_x, arm_bottom_z + 1.05]
-    ]);
-}
-
-module pcb_channels_2d() {
-    // Left and right channels are mirror images. The PCB slides in from either
-    // end along Y; there are no snap tabs to fight and no hardware required.
-    for (sx=[-1,1]) {
-        // Vertical outside wall.
-        x0 = sx < 0 ? -channel_outer_x : channel_inner_x;
-        x1 = sx < 0 ? -channel_inner_x : channel_outer_x;
-        rect2d(x0, x1, channel_base_z, channel_top_z);
-
-        // Lower support ledge: only the outer edge of the PCB is supported,
-        // leaving the board center and bottom-side soldering clear.
-        lx0 = sx < 0 ? -channel_inner_x : channel_inner_x - lower_lip_overlap;
-        lx1 = sx < 0 ? -channel_inner_x + lower_lip_overlap : channel_inner_x;
-        rect2d(lx0, lx1, channel_base_z, pcb_bottom_z);
-
-        // Upper retaining lip.
-        ux0 = sx < 0 ? -channel_inner_x : channel_inner_x - upper_lip_overlap;
-        ux1 = sx < 0 ? -channel_inner_x + upper_lip_overlap : channel_inner_x;
-        rect2d(ux0, ux1, upper_lip_bottom_z, channel_top_z);
+        translate([
+            sx * (pcb_x/2 + pcb_xy_clearance + ramp_out),
+            clip_center_y,
+            lip_inner_z - lip_t - ramp_depth
+        ])
+            cube([0.20, cradle_depth_y, 0.20], center=true);
     }
+}
 
-    // Two tiny feet connect the edge channels to the neck while preserving most
-    // of the under-PCB air gap.
-    foot_w = 2.2;
-    for (sx=[-1,1]) {
-        cx = sx * (channel_inner_x - lower_lip_overlap/2);
-        rect2d(cx-foot_w/2, cx+foot_w/2,
-               body_neck_z, channel_base_z + 0.10);
+module pcb_cradle() {
+    // Crossbar ties both snap walls into the center neck.
+    translate([0, clip_center_y, neck_z_bottom + 0.65])
+        cube([
+            pcb_x + 2*(pcb_xy_clearance + wall_t),
+            cradle_depth_y,
+            1.30
+        ], center=true);
+
+    pcb_snap_wall(-1);
+    pcb_snap_wall(1);
+}
+
+module mount_installed() {
+    // Preserve the 4.3 mm center hole present in the supplied DIN spring.
+    difference() {
+        union() {
+            source_din_clip();
+            center_neck();
+            pcb_cradle();
+        }
+
+        translate([0, clip_center_y, -20])
+            cylinder(h=30, r=2.15, center=false);
     }
-}
-
-module mount_profile_2d() {
-    union() {
-        body_profile_2d();
-        fixed_din_hook_2d();
-        spring_din_hook_2d();
-        pcb_channels_2d();
-    }
-}
-
-module mount_installed_orientation() {
-    // Extruding a single side profile is the key to the easy-print design.
-    rotate([90,0,0])
-        linear_extrude(height=mount_depth, center=true, convexity=10)
-            mount_profile_2d();
-}
-
-module reference_pcb() {
-    color([0.05,0.35,0.65,0.45])
-        translate([0,0,pcb_bottom_z + pcb_t/2])
-            cube([pcb_x, pcb_y, pcb_t], center=true);
-}
-
-module reference_din() {
-    // Simplified TH35-7.5 reference rail for fit visualization only.
-    // 35 mm overall width, 27 mm crown width, 7.5 mm height, 1 mm material.
-    crown_half = 13.5;
-    rail_len = mount_depth + 12;
-    color([0.55,0.55,0.55,0.35])
-    rotate([90,0,0])
-        linear_extrude(height=rail_len, center=true)
-            polygon(points=[
-                [-crown_half, 0], [ crown_half, 0],
-                [ rail_half, rail_flange_top_z],
-                [ rail_half, rail_flange_bottom_z],
-                [ crown_half-0.8, rail_flange_top_z+0.15],
-                [-crown_half+0.8, rail_flange_top_z+0.15],
-                [-rail_half, rail_flange_bottom_z],
-                [-rail_half, rail_flange_top_z]
-            ]);
 }
 
 module final_model() {
     if (print_orientation) {
-        // Put one broad X-Z side directly on the print bed. The spring flexes in
-        // the layer plane, which is both strong and support-free.
-        translate([0,0,mount_depth/2])
-            rotate([90,0,0])
-                mount_installed_orientation();
+        // Rotate the original Y=0 broad face onto Z=0. The clip and PCB cradle
+        // are then built in the layer plane, matching the easy-print concept.
+        rotate([90,0,0])
+            mount_installed();
     } else {
-        mount_installed_orientation();
-        if (show_reference_pcb) reference_pcb();
-        if (show_reference_din) reference_din();
+        mount_installed();
     }
 }
 
 final_model();
+
+// Preview only: uncomment to visualize the PCB envelope.
+// %translate([0, clip_center_y, pcb_inner_z - pcb_t/2])
+//     cube([pcb_x, pcb_y, pcb_t], center=true);
