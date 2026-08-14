@@ -13,6 +13,7 @@ The current firmware provides the secure connectivity and recovery foundation fo
 - Home Assistant button to restart directly into Safe Mode
 - Fallback Wi-Fi access point with its own password
 - GPIO2 blue connection-status LED with distinct Wi-Fi and Home Assistant states
+- Explicit Home Assistant API-client tracking so ESPHome log viewers do not affect the LED state
 - Wi-Fi signal sensor
 - Uptime sensor
 - IP address, SSID, and MAC address reporting
@@ -140,10 +141,12 @@ A red LED is illuminated whenever the board is powered. It is the board's power 
 The firmware configures the onboard blue/user LED on **GPIO2** as an internal connection-status indicator:
 
 - **Regular blink — 500 ms on / 500 ms off:** Wi-Fi is disconnected and the ESP32 is searching/reconnecting.
-- **Double blink, then pause:** Wi-Fi is connected, but Home Assistant has not established a state-subscribing ESPHome API connection. The pattern is 250 ms on, 250 ms off, 250 ms on, then a one-second pause before repeating.
+- **Double blink, then pause:** Wi-Fi is connected, but Home Assistant is not connected to the ESPHome API. The pattern is 250 ms on, 250 ms off, 250 ms on, then a one-second pause before repeating.
 - **Solid blue:** Home Assistant is connected to the encrypted ESPHome native API.
 
-The API check uses `state_subscription_only: true` so a logger-only ESPHome API connection does not falsely make the LED appear fully connected.
+Home Assistant connection state is tracked from ESPHome's API `on_client_connected` and `on_client_disconnected` events. Only clients whose reported `client_info` begins with `Home Assistant ` count toward the solid-blue state. This intentionally prevents opening or closing the ESPHome Device Builder log viewer from changing the LED indication.
+
+An earlier implementation used `api.connected` with `state_subscription_only: true`. Although ESPHome documents that option as filtering logger-only clients, testing on this device showed that the Device Builder log screen could still affect the LED state, so the firmware now identifies Home Assistant explicitly by client name.
 
 ## Next steps
 
