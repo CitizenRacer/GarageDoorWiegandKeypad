@@ -6,7 +6,7 @@
 # packages cannot perform !secret lookups, so the local Device Builder wrapper
 # supplies the credential substitutions from its local secrets.yaml file.
 substitutions:
-  firmware_version: "3"
+  firmware_version: "4"
 
 esphome:
   name: garage-keypad
@@ -88,11 +88,15 @@ safe_mode:
   reboot_timeout: 10min
 
 # The onboard blue LED on this 30-pin ESP32-WROOM-32 board is connected to
-# GPIO2. It is kept internal because firmware owns it as a connection-status
-# indicator rather than exposing it as a user-controllable light.
+# GPIO2. GPIO2 is a boot strapping pin, but the board already uses it for the
+# onboard LED and we do not attach external pull-up/down hardware to it. The
+# warning is therefore intentionally suppressed while retaining normal GPIO2
+# behavior after boot.
 output:
   - platform: gpio
-    pin: GPIO2
+    pin:
+      number: GPIO2
+      ignore_strapping_warning: true
     id: blue_led_output
 
 light:
