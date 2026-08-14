@@ -1,6 +1,15 @@
+# Garage Keypad firmware versioning
+# VERSIONING RULE: Increment firmware_version by 1 for every repository check-in
+# of this file.
+substitutions:
+  firmware_version: "1"
+
 esphome:
   name: garage-keypad
   friendly_name: Garage Keypad
+  project:
+    name: "citizenracer.garage_keypad"
+    version: "${firmware_version}"
 
 esp32:
   variant: esp32
@@ -175,6 +184,17 @@ sensor:
     type: seconds
 
 text_sensor:
+  # Expose this file's explicit firmware version to Home Assistant. ESPHome's
+  # project version is also included in the native API device_info response.
+  - platform: template
+    name: "Firmware Version"
+    id: firmware_version_text
+    icon: "mdi:information-box"
+    entity_category: diagnostic
+    update_interval: 600s
+    lambda: |-
+      return { ESPHOME_PROJECT_VERSION };
+
   - platform: wifi_info
     ip_address:
       name: "IP Address"
