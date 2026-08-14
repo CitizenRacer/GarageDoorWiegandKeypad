@@ -1,0 +1,11 @@
+# ESPHome secrets
+esphome/secrets.yaml
+
+# ESPHome build/cache output
+.esphome/
+esphome/.esphome/
+
+# Common local/editor files
+.DS_Store
+.vscode/
+.idea/
