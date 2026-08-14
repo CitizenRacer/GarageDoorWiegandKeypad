@@ -19,9 +19,7 @@ api:
   encryption:
     key: !secret garage_keypad_api_encryption_key
   on_client_connected:
-    - lambda: |-
-        ESP_LOGI("api_client", "Connected: client_info='%s' address='%s'",
-                 client_info.c_str(), client_address.c_str());
+    # Update the LED state immediately.
     - if:
         condition:
           lambda: |-
@@ -31,10 +29,15 @@ api:
               if (id(home_assistant_api_connections) < 255) {
                 id(home_assistant_api_connections) += 1;
               }
-  on_client_disconnected:
+    # A newly connected log viewer is not yet subscribed at the instant this
+    # callback fires. Delay the diagnostic message so the remote log stream has
+    # time to become active and can receive the client identity message.
+    - delay: 3s
     - lambda: |-
-        ESP_LOGI("api_client", "Disconnected: client_info='%s' address='%s'",
+        ESP_LOGI("api_client", "Connected: client_info='%s' address='%s'",
                  client_info.c_str(), client_address.c_str());
+  on_client_disconnected:
+    # Update the LED state immediately.
     - if:
         condition:
           lambda: |-
@@ -44,6 +47,10 @@ api:
               if (id(home_assistant_api_connections) > 0) {
                 id(home_assistant_api_connections) -= 1;
               }
+    - delay: 3s
+    - lambda: |-
+        ESP_LOGI("api_client", "Disconnected: client_info='%s' address='%s'",
+                 client_info.c_str(), client_address.c_str());
 
 ota:
   - platform: esphome
