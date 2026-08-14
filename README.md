@@ -14,6 +14,7 @@ The current firmware provides the secure connectivity and recovery foundation fo
 - Fallback Wi-Fi access point with its own password
 - GPIO2 blue connection-status LED with distinct Wi-Fi and Home Assistant states
 - Explicit Home Assistant API-client tracking so ESPHome log viewers do not affect the LED state
+- Home Assistant diagnostic entity showing the filtered HA API connection state
 - API client identity/address logging on connect and disconnect for diagnostics
 - Wi-Fi signal sensor
 - Uptime sensor
@@ -148,6 +149,25 @@ The firmware configures the onboard blue/user LED on **GPIO2** as an internal co
 Home Assistant connection state is tracked from ESPHome's API `on_client_connected` and `on_client_disconnected` events. Only clients whose reported `client_info` begins with `Home Assistant ` count toward the solid-blue state. This intentionally prevents opening or closing the ESPHome Device Builder log viewer from changing the LED indication.
 
 An earlier implementation used `api.connected` with `state_subscription_only: true`. Although ESPHome documents that option as filtering logger-only clients, testing on this device showed that the Device Builder log screen could still affect the LED state, so the firmware now identifies Home Assistant explicitly by client name.
+
+## Home Assistant connection status entity
+
+The device exposes a diagnostic binary sensor named **Home Assistant Connected**. It uses the same filtered `home_assistant_api_connections` counter as the blue LED, rather than generic ESPHome API connection state, so an `ESPHome Logs` client does not count as Home Assistant.
+
+```yaml
+binary_sensor:
+  - platform: template
+    name: "Home Assistant Connected"
+    id: home_assistant_connected
+    device_class: connectivity
+    entity_category: diagnostic
+    lambda: |-
+      return id(home_assistant_api_connections) > 0;
+```
+
+Home Assistant's `connectivity` binary-sensor device class renders the boolean state as **Connected** or **Disconnected** instead of On/Off. The entity appears under the Garage Keypad device's diagnostic entities.
+
+There is an unavoidable transport limitation: if the native API connection to Home Assistant actually drops, the ESP32 cannot send a final "Disconnected" state over that same broken connection. Home Assistant will normally mark the ESPHome device/entities unavailable until the API reconnects. Once reconnected, the diagnostic entity immediately reflects the current filtered connection state.
 
 ## API client diagnostics
 
