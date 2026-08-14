@@ -1,20 +1,20 @@
 // ChatGPT HiLetgo 4-channel BSS138 level-shifter DIN rail mount
-// Design version: 1
+// Design version: 2
 // VERSIONING RULE: Increment design_version by 1 for every repository check-in of this file.
 // Standard 35 mm x 7.5 mm top-hat DIN rail
 // Designed for the common tiny 4-channel BSS138 board sold by HiLetgo.
-// IMPORTANT: HiLetgo does not publish the PCB dimensions on the Amazon listing.
+// PCB dimensions based on customer Q&A: approximately 15.3 x 12.6 x 1.6 mm.
 // Measure your actual board and adjust pcb_x / pcb_y if needed before final printing.
 
 $fn = 48;
 
 // ---------- VERSION ----------
-design_version = 1;  // Increment by 1 on every repository check-in
+design_version = 2;  // Increment by 1 on every repository check-in
 
 // ---------- PCB PARAMETERS ----------
-// Default envelope for the common 4-channel BSS138 breakout.
-pcb_x = 13.5;          // PCB width, mm (across the two pin rows)
-pcb_y = 16.2;          // PCB length, mm (along each 6-pin row)
+// HiLetgo board envelope from customer Q&A.
+pcb_x = 15.3;          // PCB width, mm (across the two pin rows)
+pcb_y = 12.6;          // PCB length, mm (along each 6-pin row)
 pcb_t = 1.6;           // PCB thickness
 pcb_clearance = 0.35;  // per side; increase to 0.45-0.55 for a looser fit
 
