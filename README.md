@@ -18,6 +18,7 @@ The current firmware provides the secure connectivity and recovery foundation fo
 - API client identity/address logging on connect and disconnect for diagnostics
 - Wi-Fi signal sensor
 - Uptime sensor
+- ESP32 internal die-temperature diagnostic sensor
 - IP address, SSID, and MAC address reporting
 - Remote restart button
 
@@ -197,6 +198,20 @@ binary_sensor:
 Home Assistant's `connectivity` binary-sensor device class renders the boolean state as **Connected** or **Disconnected** instead of On/Off. The entity appears under the Garage Keypad device's diagnostic entities.
 
 There is an unavoidable transport limitation: if the native API connection to Home Assistant actually drops, the ESP32 cannot send a final "Disconnected" state over that same broken connection. Home Assistant will normally mark the ESPHome device/entities unavailable until the API reconnects. Once reconnected, the diagnostic entity immediately reflects the current filtered connection state.
+
+## ESP32 temperature diagnostic
+
+The device exposes the ESP32's internal silicon temperature as a diagnostic sensor named **ESP32 Temperature**:
+
+```yaml
+sensor:
+  - platform: internal_temperature
+    name: "ESP32 Temperature"
+    entity_category: diagnostic
+    update_interval: 60s
+```
+
+This is the ESP32 die temperature, not the ambient temperature inside the enclosure. It is intended for hardware-health and thermal-trend diagnostics rather than room or enclosure temperature measurement.
 
 ## API client diagnostics
 
