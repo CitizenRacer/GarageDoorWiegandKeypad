@@ -14,6 +14,7 @@ ESPHome firmware for a classic ESP32-based garage door keypad controller. The co
 - Home Assistant button to restart directly into Safe Mode
 - Fallback Wi-Fi access point with its own password
 - GPIO2 blue connection-status LED with distinct Wi-Fi and Home Assistant states
+- Intentional suppression of ESPHome's GPIO2 strapping-pin warning for the onboard LED
 - Explicit Home Assistant API-client tracking so ESPHome log viewers do not affect the LED state
 - Home Assistant diagnostic entity showing the filtered HA API connection state
 - API client identity/address logging on connect and disconnect for diagnostics
@@ -219,6 +220,17 @@ The firmware configures the onboard blue/user LED on **GPIO2** as an internal co
 - **Regular blink — 500 ms on / 500 ms off:** Wi-Fi is disconnected and the ESP32 is searching/reconnecting.
 - **Double blink, then pause:** Wi-Fi is connected, but Home Assistant is not connected to the ESPHome API. The pattern is 250 ms on, 250 ms off, 250 ms on, then a one-second pause before repeating.
 - **Solid blue:** Home Assistant is connected to the encrypted ESPHome native API.
+
+GPIO2 is also an ESP32 boot strapping pin, so ESPHome normally emits a warning when it is configured for I/O. On this specific development board GPIO2 is already wired to the onboard blue LED, and the project does not add an external pull-up or pull-down to GPIO2. The firmware therefore explicitly sets `ignore_strapping_warning: true` for this known, intentional use. This suppresses the compile-time warning only; it does not alter GPIO2's electrical behavior or boot-strapping function.
+
+```yaml
+output:
+  - platform: gpio
+    pin:
+      number: GPIO2
+      ignore_strapping_warning: true
+    id: blue_led_output
+```
 
 Home Assistant connection state is tracked from ESPHome's API `on_client_connected` and `on_client_disconnected` events. Only clients whose reported `client_info` begins with `Home Assistant ` count toward the solid-blue state. This prevents an `ESPHome Logs` client from changing the LED indication.
 
