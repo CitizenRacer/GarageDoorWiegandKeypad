@@ -11,6 +11,7 @@ The current firmware is intentionally minimal. It is meant to verify that the ES
 - OTA firmware updates
 - Web status page on port 80
 - Fallback Wi-Fi access point
+- GPIO2 blue connection-status LED
 - Wi-Fi signal sensor
 - Uptime sensor
 - IP address, SSID, and MAC address reporting
@@ -29,7 +30,7 @@ The current firmware is intentionally minimal. It is meant to verify that the ES
 - 12 V project power supply
 - 12 V to 5 V DC converter for the ESP32
 
-The firmware uses the classic `esp32` silicon variant directly. It does not currently depend on board-specific peripherals or GPIO assumptions.
+The firmware uses the classic `esp32` silicon variant directly. The onboard blue LED is currently expected to be connected to GPIO2 and is used as a firmware-controlled connection-status indicator.
 
 ## Repository structure
 
@@ -88,11 +89,21 @@ fallback_ap_password: "YOUR_FALLBACK_AP_PASSWORD"
 
 ## Onboard LEDs
 
+### Red power LED
+
 A red LED has been observed illuminated whenever the board is powered. On this style of 30-pin ESP32 development board, the red LED is the power indicator and is not intended as a software-controlled status LED.
 
-Many 30-pin ESP32-WROOM-32 development boards also provide a programmable blue/user LED connected to GPIO2. The exact Aideepen product listing does not explicitly document that connection, so GPIO2 is **not currently configured as an LED in the firmware**. It can be tested later without making the firmware depend on it.
+### Blue status LED
 
-Device health should currently be verified through serial logs, the ESPHome API, the web interface, uptime, and Wi-Fi signal reporting.
+The firmware now configures the expected onboard blue/user LED on **GPIO2** as an internal connection-status indicator:
+
+- **Blinking every 500 ms:** Wi-Fi is disconnected and the ESP32 is searching/reconnecting.
+- **Off:** Wi-Fi is connected, but Home Assistant has not yet established a state-subscribing ESPHome API connection.
+- **Solid blue:** Home Assistant is connected to the ESPHome native API.
+
+The API check uses `state_subscription_only: true` so a logger-only ESPHome API connection does not falsely make the LED appear fully connected.
+
+GPIO2 is a common onboard-blue-LED mapping for this 30-pin ESP32-WROOM-32 layout, but it is being confirmed on this exact Aideepen board through this firmware. If the LED behaves inverted, the GPIO output can be marked `inverted: true`.
 
 ## Next steps
 
