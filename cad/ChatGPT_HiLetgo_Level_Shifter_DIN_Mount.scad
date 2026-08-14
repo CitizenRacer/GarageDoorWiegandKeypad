@@ -1,16 +1,17 @@
 // ChatGPT HiLetgo 4-channel BSS138 level-shifter DIN rail mount
-// Design version: 5
+// Design version: 6
 // VERSIONING RULE: Increment design_version by 1 for every repository check-in of this file.
 //
 // The DIN-rail spring geometry below is embedded directly from the STL supplied
 // by the user. Its shape is preserved exactly; the only new geometry is the
 // compact HiLetgo PCB snap cradle joined to its center.
-// v5 fills the original 4.3 mm center hole; it is not needed for this mount.
+// v6 removes the original 4.3 mm center hole without adding a bump-out.
+// The hole is filled exactly within the original plate thickness so both faces remain flush.
 //
 // HiLetgo PCB envelope used here: approximately 15.3 x 12.6 x 1.6 mm.
 
 $fn = 48;
-design_version = 5;
+design_version = 6;
 print_orientation = true;  // true = broad side on build plate for support-free printing
 
 // ---------- PCB ----------
@@ -36,8 +37,8 @@ pcb_inner_z = -7.40;
 pcb_outer_z = pcb_inner_z - pcb_t;
 lip_inner_z = pcb_outer_z - pcb_z_clearance;
 
-// Compact neck attaches only to the center of the supplied spring so its
-// outer spring arms and DIN hooks remain unchanged.
+// Legacy neck dimensions retained for cradle geometry reference; v6 does not add
+// the square center neck to the rail-facing surface.
 neck_x = 8.0;
 neck_y = 8.0;
 neck_z_top = -3.20;
@@ -435,6 +436,14 @@ module source_din_clip() {
     );
 }
 
+module center_hole_filler() {
+    // Fill ONLY the original cylindrical mounting hole, exactly between the two
+    // original plate faces. This produces a continuous flat plate with no hole
+    // and no square/rectangular bump on either face.
+    translate([0, clip_center_y, -6.416352])
+        cylinder(h=3.0, r=2.15, center=false, $fn=64);
+}
+
 module center_neck() {
     translate([0, clip_center_y, (neck_z_top + neck_z_bottom)/2])
         cube([neck_x, neck_y, neck_z_top - neck_z_bottom], center=true);
@@ -504,11 +513,11 @@ module pcb_cradle() {
 }
 
 module mount_installed() {
-    // The center neck intentionally fills the original 4.3 mm mounting hole.
-    // No center hole is needed for the HiLetgo DIN-rail mount.
+    // No mounting holes. The former 4.3 mm hole is filled flush with the
+    // original DIN-clip plate; no square bump-out is added.
     union() {
         source_din_clip();
-        center_neck();
+        center_hole_filler();
         pcb_cradle();
     }
 }
