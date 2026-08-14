@@ -11,9 +11,33 @@ logger:
 
 # Home Assistant communicates with the device over ESPHome's encrypted
 # native API. The Noise PSK is stored only in the local secrets.yaml file.
+#
+# Track Home Assistant connections by the API client's reported name rather
+# than by generic API connection state. This prevents the ESPHome log viewer
+# from changing the blue status LED.
 api:
   encryption:
     key: !secret garage_keypad_api_encryption_key
+  on_client_connected:
+    - if:
+        condition:
+          lambda: |-
+            return client_info.find("Home Assistant ") == 0;
+        then:
+          - lambda: |-
+              if (id(home_assistant_api_connections) < 255) {
+                id(home_assistant_api_connections) += 1;
+              }
+  on_client_disconnected:
+    - if:
+        condition:
+          lambda: |-
+            return client_info.find("Home Assistant ") == 0;
+        then:
+          - lambda: |-
+              if (id(home_assistant_api_connections) > 0) {
+                id(home_assistant_api_connections) -= 1;
+              }
 
 ota:
   - platform: esphome
@@ -52,29 +76,34 @@ light:
     internal: true
     restore_mode: ALWAYS_OFF
 
-# Tracks the current position within the LED blink pattern.
 globals:
+  # Current position within the LED blink pattern.
   - id: blue_status_phase
     type: uint8_t
     restore_value: no
     initial_value: '0'
 
+  # Number of native API clients whose reported name begins with
+  # "Home Assistant ". Logger-only clients do not affect this value.
+  - id: home_assistant_api_connections
+    type: uint8_t
+    restore_value: no
+    initial_value: '0'
+
 # Status LED behavior:
-#   Regular blink:       Wi-Fi is disconnected / searching.
+#   Regular blink:        Wi-Fi is disconnected / searching.
 #   Double blink + pause: Wi-Fi is connected, but Home Assistant is not.
-#   Solid:               Home Assistant is connected to the encrypted API.
+#   Solid:                Home Assistant is connected to the encrypted API.
 #
 # The 250 ms scheduler gives a 500 ms on/off Wi-Fi-search blink and a
 # 250 ms ON, 250 ms OFF, 250 ms ON, 1 second OFF double-blink pattern.
-# state_subscription_only prevents a logger-only API connection from being
-# mistaken for Home Assistant.
 interval:
   - interval: 250ms
     then:
       - if:
           condition:
-            api.connected:
-              state_subscription_only: true
+            lambda: |-
+              return id(home_assistant_api_connections) > 0;
           then:
             - light.turn_on: blue_status_led
             - lambda: |-
