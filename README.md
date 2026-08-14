@@ -2,20 +2,23 @@
 
 ESPHome firmware for a classic ESP32-based garage door keypad controller. The board is sold by Aideepen as an **ESP32S 30-pin USB-C NodeMCU development board with ESP32-WROOM-32 and CP2102** (Amazon ASIN `B0DNYR973V`). The detected SoC is an **ESP32-D0WD-V3**.
 
-The current firmware is intentionally minimal. It is meant to verify that the ESP32 is alive, connected to Wi-Fi, visible to Home Assistant, and ready for wireless OTA updates before the keypad hardware is connected.
+The current firmware provides the secure connectivity and recovery foundation for the garage keypad before the keypad hardware is connected.
 
 ## Current features
 
 - Wi-Fi connectivity
-- ESPHome native API for Home Assistant
-- OTA firmware updates
-- Web status page on port 80
-- Fallback Wi-Fi access point
+- ESPHome native API for Home Assistant with Noise encryption
+- Password-protected ESPHome OTA firmware updates
+- Explicit ESPHome Safe Mode recovery after repeated boot failures
+- Home Assistant button to restart directly into Safe Mode
+- Fallback Wi-Fi access point with its own password
 - GPIO2 blue connection-status LED
 - Wi-Fi signal sensor
 - Uptime sensor
 - IP address, SSID, and MAC address reporting
 - Remote restart button
+
+The ESPHome HTTP `web_server` is intentionally disabled. The keypad will eventually handle security-sensitive information, so normal management and telemetry use the encrypted native API instead of exposing an additional plaintext HTTP interface.
 
 ## Hardware
 
@@ -30,7 +33,7 @@ The current firmware is intentionally minimal. It is meant to verify that the ES
 - 12 V project power supply
 - 12 V to 5 V DC converter for the ESP32
 
-The firmware uses the classic `esp32` silicon variant directly. The onboard blue LED is currently expected to be connected to GPIO2 and is used as a firmware-controlled connection-status indicator.
+The firmware uses the classic `esp32` silicon variant directly. The onboard blue LED is connected to GPIO2 and is used as a firmware-controlled connection-status indicator.
 
 ## Repository structure
 
@@ -46,14 +49,14 @@ GarageDoorKeypad/
 ## Initial setup
 
 1. Copy `esphome/secrets.example.yaml` to `esphome/secrets.yaml`.
-2. Fill in your Wi-Fi and password values in `secrets.yaml`.
-3. Add `garage-keypad.yaml` to ESPHome Device Builder or compile it with ESPHome.
-4. When ESPHome Device Builder asks for the board family, choose **ESP32** (classic ESP32), not ESP32-S2/S3/C3/C6.
-5. Connect the ESP32 by USB-C and perform the first installation over USB.
-6. If the board is stuck in an `invalid header` boot loop from a previous incorrect image, erase the flash first, then install the new firmware over USB.
-7. After it boots, verify that it connects to Wi-Fi and appears in ESPHome/Home Assistant.
-8. Open `http://garage-keypad.local` or use the IP address shown by ESPHome.
-9. Future firmware installations can be performed wirelessly with ESPHome OTA.
+2. Fill in the Wi-Fi, OTA, fallback-AP, and API-encryption values in `secrets.yaml`.
+3. Generate a unique ESPHome API encryption key with `openssl rand -base64 32`, or another cryptographically secure method that produces 32 random bytes encoded as base64.
+4. Add `garage-keypad.yaml` to ESPHome Device Builder or compile it with ESPHome.
+5. When ESPHome Device Builder asks for the board family, choose **ESP32** (classic ESP32), not ESP32-S2/S3/C3/C6.
+6. Connect the ESP32 by USB-C and perform the first installation over USB if the device has not yet been provisioned. Existing installations can normally be updated over ESPHome OTA.
+7. If the board is stuck in an `invalid header` boot loop from an earlier incorrect image, erase the flash first and reinstall over USB.
+8. After enabling API encryption, Home Assistant must be configured with the same Noise PSK stored in `api_encryption_key` before it can reconnect to the device.
+9. Future firmware installations can normally be performed wirelessly with ESPHome OTA.
 
 ## ESP32 target
 
@@ -85,26 +88,62 @@ wifi_ssid: "YOUR_WIFI_NAME"
 wifi_password: "YOUR_WIFI_PASSWORD"
 ota_password: "YOUR_OTA_PASSWORD"
 fallback_ap_password: "YOUR_FALLBACK_AP_PASSWORD"
+api_encryption_key: "YOUR_32_BYTE_BASE64_NOISE_PSK"
 ```
+
+The API encryption key is a security credential. Use a unique key for this device and do not commit the real value to the repository.
+
+## Security
+
+Home Assistant communicates with the keypad over ESPHome's native API on its normal API port. The firmware enables ESPHome's Noise-based API encryption using the secret referenced as `api_encryption_key`.
+
+```yaml
+api:
+  encryption:
+    key: !secret api_encryption_key
+```
+
+The same 32-byte base64 Noise PSK must be stored in Home Assistant's ESPHome integration for this device. Without the matching key, Home Assistant cannot establish the encrypted API session.
+
+The plaintext ESPHome `web_server` component is intentionally not enabled. OTA updates remain protected by the separate `ota_password`, and the fallback Wi-Fi network has its own `fallback_ap_password`.
+
+## Safe Mode recovery
+
+ESPHome Safe Mode is explicitly configured:
+
+```yaml
+safe_mode:
+  num_attempts: 5
+  boot_is_good_after: 1min
+  reboot_timeout: 10min
+```
+
+Behavior:
+
+- A boot is considered successful after the firmware runs continuously for one minute.
+- After five failed boot attempts, ESPHome enters Safe Mode.
+- Safe Mode disables normal components while retaining networking, serial logging, and OTA so a bad firmware configuration can usually be repaired wirelessly.
+- Safe Mode remains available for ten minutes before rebooting and trying normal firmware again.
+- Home Assistant exposes a **Restart in Safe Mode** button for intentionally entering the recovery environment before an OTA repair.
+
+If firmware damage prevents ESPHome itself from running, the ESP32's ROM serial bootloader remains available. Hold **BOOT**, press and release **EN/RST**, then release **BOOT** to enter the hardware download mode for USB recovery.
 
 ## Onboard LEDs
 
 ### Red power LED
 
-A red LED has been observed illuminated whenever the board is powered. On this style of 30-pin ESP32 development board, the red LED is the power indicator and is not intended as a software-controlled status LED.
+A red LED is illuminated whenever the board is powered. It is the board's power indicator and is not intended as a software-controlled status LED.
 
 ### Blue status LED
 
-The firmware now configures the expected onboard blue/user LED on **GPIO2** as an internal connection-status indicator:
+The firmware configures the onboard blue/user LED on **GPIO2** as an internal connection-status indicator:
 
 - **Blinking every 500 ms:** Wi-Fi is disconnected and the ESP32 is searching/reconnecting.
 - **Off:** Wi-Fi is connected, but Home Assistant has not yet established a state-subscribing ESPHome API connection.
-- **Solid blue:** Home Assistant is connected to the ESPHome native API.
+- **Solid blue:** Home Assistant is connected to the encrypted ESPHome native API.
 
 The API check uses `state_subscription_only: true` so a logger-only ESPHome API connection does not falsely make the LED appear fully connected.
 
-GPIO2 is a common onboard-blue-LED mapping for this 30-pin ESP32-WROOM-32 layout, but it is being confirmed on this exact Aideepen board through this firmware. If the LED behaves inverted, the GPIO output can be marked `inverted: true`.
-
 ## Next steps
 
-Once the keypad is connected, the firmware can be extended with the keypad interface, credential handling, garage-door actions, and Home Assistant status/control entities.
+Once the keypad is connected, the firmware can be extended with the keypad interface, credential handling, garage-door actions, and Home Assistant status/control entities. Security-sensitive values should remain local to the device/Home Assistant wherever practical and should not be emitted into logs or exposed as unnecessary entities.
