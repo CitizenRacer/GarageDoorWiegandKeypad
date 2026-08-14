@@ -13,12 +13,15 @@ logger:
 # native API. The Noise PSK is stored only in the local secrets.yaml file.
 #
 # Track Home Assistant connections by the API client's reported name rather
-# than by generic API connection state. This prevents the ESPHome log viewer
-# from changing the blue status LED.
+# than by generic API connection state. API client identity is also logged on
+# connect/disconnect to make connection-state debugging unambiguous.
 api:
   encryption:
     key: !secret garage_keypad_api_encryption_key
   on_client_connected:
+    - lambda: |-
+        ESP_LOGI("api_client", "Connected: client_info='%s' address='%s'",
+                 client_info.c_str(), client_address.c_str());
     - if:
         condition:
           lambda: |-
@@ -29,6 +32,9 @@ api:
                 id(home_assistant_api_connections) += 1;
               }
   on_client_disconnected:
+    - lambda: |-
+        ESP_LOGI("api_client", "Disconnected: client_info='%s' address='%s'",
+                 client_info.c_str(), client_address.c_str());
     - if:
         condition:
           lambda: |-
