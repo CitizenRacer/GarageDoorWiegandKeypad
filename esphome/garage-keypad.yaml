@@ -1,8 +1,12 @@
 # Garage Keypad firmware versioning
 # VERSIONING RULE: Increment firmware_version by 1 for every repository check-in
 # of this file.
+#
+# This file is designed to be consumed as a remote ESPHome Git package. Remote
+# packages cannot perform !secret lookups, so the local Device Builder wrapper
+# supplies the credential substitutions from its local secrets.yaml file.
 substitutions:
-  firmware_version: "2"
+  firmware_version: "3"
 
 esphome:
   name: garage-keypad
@@ -19,14 +23,14 @@ esp32:
 logger:
 
 # Home Assistant communicates with the device over ESPHome's encrypted
-# native API. The Noise PSK is stored only in the local secrets.yaml file.
+# native API. The Noise PSK is supplied by the local Device Builder wrapper.
 #
 # Track Home Assistant connections by the API client's reported name rather
 # than by generic API connection state. API client identity is also logged on
 # connect/disconnect to make connection-state debugging unambiguous.
 api:
   encryption:
-    key: !secret garage_keypad_api_encryption_key
+    key: "${garage_keypad_api_encryption_key}"
   on_client_connected:
     # Update the LED state immediately.
     - if:
@@ -63,15 +67,15 @@ api:
 
 ota:
   - platform: esphome
-    password: !secret ota_password
+    password: "${ota_password}"
 
 wifi:
-  ssid: !secret wifi_ssid
-  password: !secret wifi_password
+  ssid: "${wifi_ssid}"
+  password: "${wifi_password}"
 
   ap:
     ssid: "Garage-Keypad-Fallback"
-    password: !secret fallback_ap_password
+    password: "${fallback_ap_password}"
 
 captive_portal:
 
