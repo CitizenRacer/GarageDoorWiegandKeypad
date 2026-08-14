@@ -51,12 +51,13 @@ GarageDoorKeypad/
 1. Copy `esphome/secrets.example.yaml` to `esphome/secrets.yaml`.
 2. Fill in the Wi-Fi, OTA, fallback-AP, and API-encryption values in `secrets.yaml`.
 3. Generate a unique ESPHome API encryption key with `openssl rand -base64 32`, or another cryptographically secure method that produces 32 random bytes encoded as base64.
-4. Add `garage-keypad.yaml` to ESPHome Device Builder or compile it with ESPHome.
-5. When ESPHome Device Builder asks for the board family, choose **ESP32** (classic ESP32), not ESP32-S2/S3/C3/C6.
-6. Connect the ESP32 by USB-C and perform the first installation over USB if the device has not yet been provisioned. Existing installations can normally be updated over ESPHome OTA.
-7. If the board is stuck in an `invalid header` boot loop from an earlier incorrect image, erase the flash first and reinstall over USB.
-8. After enabling API encryption, Home Assistant must be configured with the same Noise PSK stored in `api_encryption_key` before it can reconnect to the device.
-9. Future firmware installations can normally be performed wirelessly with ESPHome OTA.
+4. Store that value as `garage_keypad_api_encryption_key` in `secrets.yaml`.
+5. Add `garage-keypad.yaml` to ESPHome Device Builder or compile it with ESPHome.
+6. When ESPHome Device Builder asks for the board family, choose **ESP32** (classic ESP32), not ESP32-S2/S3/C3/C6.
+7. Connect the ESP32 by USB-C and perform the first installation over USB if the device has not yet been provisioned. Existing installations can normally be updated over ESPHome OTA.
+8. If the board is stuck in an `invalid header` boot loop from an earlier incorrect image, erase the flash first and reinstall over USB.
+9. After enabling API encryption, Home Assistant must be configured with the same Noise PSK stored in `garage_keypad_api_encryption_key` before it can reconnect to the device.
+10. Future firmware installations can normally be performed wirelessly with ESPHome OTA.
 
 ## ESP32 target
 
@@ -88,19 +89,19 @@ wifi_ssid: "YOUR_WIFI_NAME"
 wifi_password: "YOUR_WIFI_PASSWORD"
 ota_password: "YOUR_OTA_PASSWORD"
 fallback_ap_password: "YOUR_FALLBACK_AP_PASSWORD"
-api_encryption_key: "YOUR_32_BYTE_BASE64_NOISE_PSK"
+garage_keypad_api_encryption_key: "YOUR_32_BYTE_BASE64_NOISE_PSK"
 ```
 
-The API encryption key is a security credential. Use a unique key for this device and do not commit the real value to the repository.
+The API encryption key is deliberately namespaced as `garage_keypad_api_encryption_key` so a shared ESPHome `secrets.yaml` can contain independent keys for multiple devices without ambiguity or accidental reuse. Use a unique key for this device and do not commit the real value to the repository.
 
 ## Security
 
-Home Assistant communicates with the keypad over ESPHome's native API on its normal API port. The firmware enables ESPHome's Noise-based API encryption using the secret referenced as `api_encryption_key`.
+Home Assistant communicates with the keypad over ESPHome's native API. The firmware enables ESPHome's Noise-based API encryption using the namespaced secret `garage_keypad_api_encryption_key`.
 
 ```yaml
 api:
   encryption:
-    key: !secret api_encryption_key
+    key: !secret garage_keypad_api_encryption_key
 ```
 
 The same 32-byte base64 Noise PSK must be stored in Home Assistant's ESPHome integration for this device. Without the matching key, Home Assistant cannot establish the encrypted API session.
