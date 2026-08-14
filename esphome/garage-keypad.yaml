@@ -9,7 +9,11 @@ esp32:
 
 logger:
 
+# Home Assistant communicates with the device over ESPHome's encrypted
+# native API. The Noise PSK is stored only in the local secrets.yaml file.
 api:
+  encryption:
+    key: !secret api_encryption_key
 
 ota:
   - platform: esphome
@@ -25,12 +29,17 @@ wifi:
 
 captive_portal:
 
-web_server:
-  port: 80
+# Enter a minimal recovery environment after repeated failed boots. In safe
+# mode ESPHome leaves networking, logging, and OTA available so a bad firmware
+# update can normally be repaired wirelessly.
+safe_mode:
+  num_attempts: 5
+  boot_is_good_after: 1min
+  reboot_timeout: 10min
 
-# The onboard blue LED on this 30-pin ESP32-WROOM-32 board is expected
-# to be connected to GPIO2. It is kept internal because firmware owns it
-# as a connection-status indicator rather than a user-controllable light.
+# The onboard blue LED on this 30-pin ESP32-WROOM-32 board is connected to
+# GPIO2. It is kept internal because firmware owns it as a connection-status
+# indicator rather than exposing it as a user-controllable light.
 output:
   - platform: gpio
     pin: GPIO2
@@ -46,7 +55,7 @@ light:
 # Status LED behavior:
 #   Blinking: Wi-Fi is disconnected / searching.
 #   Off:      Wi-Fi is connected, but Home Assistant is not connected yet.
-#   Solid:    Home Assistant is connected to the ESPHome native API.
+#   Solid:    Home Assistant is connected to the encrypted ESPHome API.
 #
 # state_subscription_only prevents a logger-only API connection from being
 # mistaken for Home Assistant.
@@ -89,3 +98,6 @@ text_sensor:
 button:
   - platform: restart
     name: "Restart"
+
+  - platform: safe_mode
+    name: "Restart in Safe Mode"
