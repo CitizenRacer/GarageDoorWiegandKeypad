@@ -1,6 +1,6 @@
 # Garage Door Keypad
 
-ESPHome firmware for a classic ESP32-based garage door keypad controller. The board is sold by Aideepen as an **ESP32S 30-pin USB-C NodeMCU development board with ESP32-WROOM-32 and CP2102** (Amazon ASIN `B0DNYR973V`). The detected SoC is an **ESP32-D0WD-V3**.
+ESPHome firmware for a classic ESP32-based garage door keypad controller. The controller is an **ESP32S 30-pin USB-C NodeMCU development board with ESP32-WROOM-32 and CP2102**. The detected SoC is an **ESP32-D0WD-V3**.
 
 The current firmware provides the secure connectivity and recovery foundation for the garage keypad before the keypad hardware is connected.
 
@@ -23,18 +23,42 @@ The current firmware provides the secure connectivity and recovery foundation fo
 
 The ESPHome HTTP `web_server` is intentionally disabled. The keypad will eventually handle security-sensitive information, so normal management and telemetry use the encrypted native API instead of exposing an additional plaintext HTTP interface.
 
-## Hardware
+## Bill of materials
 
-- Aideepen ESP32S 30-pin USB-C NodeMCU development board
-  - ESP32-WROOM-32 module
-  - ESP32-D0WD-V3 SoC
-  - CP2102 USB-to-serial interface
-  - USB-C connector
-  - 30-pin layout
-  - Amazon ASIN `B0DNYR973V`
-- Garage keypad/access controller — not connected yet
-- 12 V project power supply
-- 12 V to 5 V DC converter for the ESP32
+The following are the selected parts for the current build. Amazon links point to the specific parts chosen for this project.
+
+| Qty | Part | Purpose | Link |
+|---:|---|---|---|
+| 1 | **S20-ID IP68 Wiegand keypad / RFID reader** | Outdoor keypad and 125 kHz ID credential reader; provides Wiegand D0/D1 to the controller | [Amazon](https://amzn.to/4zhUrBZ) |
+| 1 | **ESP32S 30-pin USB-C ESP32-WROOM-32 development board** | Main controller running ESPHome | [Amazon](https://amzn.to/4wNM9PX) |
+| 1 | **eletechsup ES350+485 30-pin ESP32 expansion / terminal board** | Screw-terminal carrier for the ESP32 with convenient power/GPIO breakout and DIN-rail-friendly mounting | [Amazon](https://amzn.to/3SA5LZx) |
+| 1 | **MEAN WELL HDR-30-12 DIN-rail power supply** | 120 VAC project power supply providing 12 V DC | [Amazon](https://amzn.to/4zhTsSj) |
+| 1 | **HiLetgo 4-channel BSS138 bidirectional logic level shifter** | Level shifts the keypad Wiegand D0/D1 signals for the 3.3 V ESP32 | [Amazon](https://amzn.to/4geWuy3) |
+| As needed | **4-conductor 22 AWG security wire, in-wall rated** | In-wall cable between the outdoor keypad and the project enclosure | [Amazon](https://amzn.to/3TZ253Y) |
+| As needed | **18 AWG stranded wire** | Internal project power wiring | [Amazon](https://amzn.to/4wEJs36) |
+| 1 | **AC power cable** | Mains input cable for the project enclosure | [Amazon](https://amzn.to/4ze44kZ) |
+| 1 | **Project box / enclosure** | Houses the power supply, controller, level shifter, DIN rail, and terminal blocks | [Amazon](https://amzn.to/4wyDtg6) |
+| As needed | **35 mm DIN rail** | Additional internal mounting rail | [Amazon](https://amzn.to/4wNLYEh) |
+| As needed | **DIN-rail wire connectors / terminal blocks** | Organized power and signal distribution inside the enclosure | [Amazon](https://amzn.to/4qj1sy7) |
+| 1 | **3D-printed level-shifter DIN holder** | Mounts the HiLetgo level-shifter PCB to the DIN rail | [`cad/HiLetgo_Level_Shifter_DIN_CableClamp.scad`](cad/HiLetgo_Level_Shifter_DIN_CableClamp.scad) |
+
+### Reference images
+
+#### S20-ID IP68 Wiegand keypad
+
+<a href="https://amzn.to/4zhUrBZ"><img src="https://esphome.io/images/wiegand.jpg" alt="S20-ID Wiegand keypad and RFID reader" width="260"></a>
+
+#### ESP32S 30-pin USB-C board
+
+<a href="https://amzn.to/4wNM9PX"><img src="https://down-vn.img.susercontent.com/file/sg-11134201-7qven-ljgyfu3ej66q67" alt="ESP32S 30-pin USB-C ESP32-WROOM-32 development board" width="420"></a>
+
+#### ESP32 screw-terminal expansion board
+
+<a href="https://amzn.to/3SA5LZx"><img src="docs/images/esp32-terminal-board.jpg" alt="eletechsup ES350+485 30-pin ESP32 expansion terminal board" width="560"></a>
+
+#### MEAN WELL HDR-30-12 power supply
+
+<a href="https://amzn.to/4zhTsSj"><img src="https://nowyelektronik.pl/img/p/3/4/7/6/7/7/347677-large_default.jpg" alt="MEAN WELL HDR-30-12 DIN rail power supply" width="360"></a>
 
 The firmware uses the classic `esp32` silicon variant directly. The onboard blue LED is connected to GPIO2 and is used as a firmware-controlled connection-status indicator.
 
@@ -44,6 +68,11 @@ The firmware uses the classic `esp32` silicon variant directly. The onboard blue
 GarageDoorKeypad/
 ├── README.md
 ├── .gitignore
+├── cad/
+│   └── HiLetgo_Level_Shifter_DIN_CableClamp.scad
+├── docs/
+│   └── images/
+│       └── esp32-terminal-board.jpg
 └── esphome/
     ├── garage-keypad.yaml
     └── secrets.example.yaml
