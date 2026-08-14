@@ -153,6 +153,8 @@ An earlier implementation used `api.connected` with `state_subscription_only: tr
 
 Every ESPHome native-API client connection and disconnection is logged with the reported `client_info` and remote address. This is specifically intended to verify the exact client name Home Assistant presents to the device and to distinguish it from ESPHome Device Builder/log clients.
 
+The diagnostic message is intentionally delayed by three seconds. An ESPHome log viewer is not yet subscribed to the remote log stream at the exact instant its API connection is established, so an immediate `on_client_connected` log can be emitted before the viewer is capable of receiving it. The Home Assistant connection counter used by the status LED is still updated immediately; only the diagnostic log message is delayed.
+
 Example log messages:
 
 ```text
