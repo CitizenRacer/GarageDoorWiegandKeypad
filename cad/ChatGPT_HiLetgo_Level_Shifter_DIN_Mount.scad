@@ -1,15 +1,16 @@
 // ChatGPT HiLetgo 4-channel BSS138 level-shifter DIN rail mount
-// Design version: 4
+// Design version: 5
 // VERSIONING RULE: Increment design_version by 1 for every repository check-in of this file.
 //
 // The DIN-rail spring geometry below is embedded directly from the STL supplied
 // by the user. Its shape is preserved exactly; the only new geometry is the
 // compact HiLetgo PCB snap cradle joined to its center.
+// v5 fills the original 4.3 mm center hole; it is not needed for this mount.
 //
 // HiLetgo PCB envelope used here: approximately 15.3 x 12.6 x 1.6 mm.
 
 $fn = 48;
-design_version = 4;
+design_version = 5;
 print_orientation = true;  // true = broad side on build plate for support-free printing
 
 // ---------- PCB ----------
@@ -503,16 +504,12 @@ module pcb_cradle() {
 }
 
 module mount_installed() {
-    // Preserve the 4.3 mm center hole present in the supplied DIN spring.
-    difference() {
-        union() {
-            source_din_clip();
-            center_neck();
-            pcb_cradle();
-        }
-
-        translate([0, clip_center_y, -20])
-            cylinder(h=30, r=2.15, center=false);
+    // The center neck intentionally fills the original 4.3 mm mounting hole.
+    // No center hole is needed for the HiLetgo DIN-rail mount.
+    union() {
+        source_din_clip();
+        center_neck();
+        pcb_cradle();
     }
 }
 
