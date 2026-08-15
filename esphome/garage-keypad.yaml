@@ -6,7 +6,7 @@
 # packages cannot perform !secret lookups, so the local Device Builder wrapper
 # supplies the credential substitutions from its local secrets.yaml file.
 substitutions:
-  firmware_version: "6"
+  firmware_version: "7"
 
   # Default ESP32 GPIOs for the low-voltage side of the Wiegand level shifter.
   # Physical wiring:
@@ -19,7 +19,8 @@ substitutions:
 
   # SECURITY: Leave false in production. Set to true only while actively
   # testing the keypad; when enabled, completed PINs are written to ESPHome's
-  # logs in plaintext.
+  # logs in plaintext and published to the Debug Last Keypad Value entity in
+  # Home Assistant.
   keypad_debug_logging: "false"
 
 esphome:
@@ -119,8 +120,10 @@ wiegand:
 # Collect 4-8 numeric digits. '#' submits the PIN, '*' clears the current
 # entry, and an incomplete entry is discarded after ten seconds.
 #
-# The completed PIN is not exposed as an ESPHome entity. It is passed directly
-# to Home Assistant as transient action data for validation.
+# In production the completed PIN is not exposed as an ESPHome entity. It is
+# passed directly to Home Assistant as transient action data for validation.
+# When keypad_debug_logging is explicitly enabled, the plaintext value is also
+# published to a diagnostic text sensor for bench testing.
 key_collector:
   - id: garage_keypad_pin
     source_id: garage_keypad_wiegand
@@ -133,11 +136,12 @@ key_collector:
     timeout: 10s
 
     on_result:
-      # DEBUG ONLY: when explicitly enabled, log the completed plaintext PIN.
-      # Brackets make leading/trailing content visually unambiguous in logs.
+      # DEBUG ONLY: when explicitly enabled, log the completed plaintext PIN
+      # and publish it to Home Assistant for bench testing.
       - lambda: |-
           if (strcmp("${keypad_debug_logging}", "true") == 0) {
             ESP_LOGW("keypad", "DEBUG MODE - PIN entered: [%s]", x.c_str());
+            id(keypad_debug_last_value).publish_state(x.c_str());
           } else {
             ESP_LOGI("keypad", "PIN entered (%u digits)",
                      static_cast<unsigned>(x.size()));
@@ -271,6 +275,21 @@ sensor:
     update_interval: 60s
 
 text_sensor:
+  # DEBUG ONLY: this entity receives the last successfully completed keypad
+  # value only when keypad_debug_logging is true. When debug mode is disabled,
+  # it never receives the plaintext keypad value.
+  - platform: template
+    name: "Debug Last Keypad Value"
+    id: keypad_debug_last_value
+    icon: "mdi:dialpad"
+    entity_category: diagnostic
+    update_interval: 60s
+    lambda: |-
+      if (strcmp("${keypad_debug_logging}", "true") != 0) {
+        return {"DEBUG DISABLED"};
+      }
+      return {};
+
   # Expose this file's explicit firmware version to Home Assistant. ESPHome's
   # project version is also included in the native API device_info response.
   - platform: template
