@@ -6,13 +6,16 @@
 # packages cannot perform !secret lookups, so the local Device Builder wrapper
 # supplies the credential substitutions from its local secrets.yaml file.
 substitutions:
-  firmware_version: "5"
+  firmware_version: "6"
 
   # Default ESP32 GPIOs for the low-voltage side of the Wiegand level shifter.
+  # Physical wiring:
+  #   Keypad Green D0 -> HV3/LV3 -> GPIO22
+  #   Keypad White D1 -> HV2/LV2 -> GPIO19
   # These can be overridden from the local Device Builder wrapper without
   # modifying this remote package.
-  garage_keypad_d0_pin: "GPIO25"
-  garage_keypad_d1_pin: "GPIO26"
+  garage_keypad_d0_pin: "GPIO22"
+  garage_keypad_d1_pin: "GPIO19"
 
   # SECURITY: Leave false in production. Set to true only while actively
   # testing the keypad; when enabled, completed PINs are written to ESPHome's
@@ -103,10 +106,10 @@ safe_mode:
 # ---------------------------------------------------------------------------
 #
 # Connect the LOW-VOLTAGE / 3.3 V side of the level shifter as follows:
-#   D0 -> ${garage_keypad_d0_pin}
-#   D1 -> ${garage_keypad_d1_pin}
+#   Green D0: HV3 -> LV3 -> ${garage_keypad_d0_pin}
+#   White D1: HV2 -> LV2 -> ${garage_keypad_d1_pin}
 #
-# The pin substitutions default to GPIO25/GPIO26 but can be overridden in the
+# The pin substitutions default to GPIO22/GPIO19 but can be overridden in the
 # local Device Builder wrapper if the physical wiring changes.
 wiegand:
   - id: garage_keypad_wiegand
