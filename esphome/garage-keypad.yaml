@@ -6,7 +6,18 @@
 # packages cannot perform !secret lookups, so the local Device Builder wrapper
 # supplies the credential substitutions from its local secrets.yaml file.
 substitutions:
-  firmware_version: "4"
+  firmware_version: "5"
+
+  # Default ESP32 GPIOs for the low-voltage side of the Wiegand level shifter.
+  # These can be overridden from the local Device Builder wrapper without
+  # modifying this remote package.
+  garage_keypad_d0_pin: "GPIO25"
+  garage_keypad_d1_pin: "GPIO26"
+
+  # SECURITY: Leave false in production. Set to true only while actively
+  # testing the keypad; when enabled, completed PINs are written to ESPHome's
+  # logs in plaintext.
+  keypad_debug_logging: "false"
 
 esphome:
   name: garage-keypad
@@ -86,6 +97,64 @@ safe_mode:
   num_attempts: 5
   boot_is_good_after: 1min
   reboot_timeout: 10min
+
+# ---------------------------------------------------------------------------
+# Garage keypad - Wiegand input and PIN collection
+# ---------------------------------------------------------------------------
+#
+# Connect the LOW-VOLTAGE / 3.3 V side of the level shifter as follows:
+#   D0 -> ${garage_keypad_d0_pin}
+#   D1 -> ${garage_keypad_d1_pin}
+#
+# The pin substitutions default to GPIO25/GPIO26 but can be overridden in the
+# local Device Builder wrapper if the physical wiring changes.
+wiegand:
+  - id: garage_keypad_wiegand
+    d0: "${garage_keypad_d0_pin}"
+    d1: "${garage_keypad_d1_pin}"
+
+# Collect 4-8 numeric digits. '#' submits the PIN, '*' clears the current
+# entry, and an incomplete entry is discarded after ten seconds.
+#
+# The completed PIN is not exposed as an ESPHome entity. It is passed directly
+# to Home Assistant as transient action data for validation.
+key_collector:
+  - id: garage_keypad_pin
+    source_id: garage_keypad_wiegand
+    min_length: 4
+    max_length: 8
+    allowed_keys: "0123456789"
+    end_keys: "#"
+    end_key_required: true
+    clear_keys: "*"
+    timeout: 10s
+
+    on_result:
+      # DEBUG ONLY: when explicitly enabled, log the completed plaintext PIN.
+      # Brackets make leading/trailing content visually unambiguous in logs.
+      - lambda: |-
+          if (strcmp("${keypad_debug_logging}", "true") == 0) {
+            ESP_LOGW("keypad", "DEBUG MODE - PIN entered: [%s]", x.c_str());
+          } else {
+            ESP_LOGI("keypad", "PIN entered (%u digits)",
+                     static_cast<unsigned>(x.size()));
+          }
+
+      # Send the completed PIN directly to Home Assistant over the encrypted
+      # native API. Home Assistant owns authorization and garage-door actions.
+      # The Home Assistant ESPHome integration must allow this device to
+      # perform Home Assistant actions.
+      - homeassistant.action:
+          action: script.garage_keypad_validate_pin
+          data:
+            pin: !lambda |-
+              return x.str();
+
+    on_timeout:
+      - logger.log:
+          tag: keypad
+          level: INFO
+          format: "PIN entry timed out"
 
 # The onboard blue LED on this 30-pin ESP32-WROOM-32 board is connected to
 # GPIO2. GPIO2 is a boot strapping pin, but the board already uses it for the
