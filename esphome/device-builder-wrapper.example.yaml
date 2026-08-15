@@ -8,6 +8,15 @@ substitutions:
   fallback_ap_password: !secret fallback_ap_password
   garage_keypad_api_encryption_key: !secret garage_keypad_api_encryption_key
 
+  # TESTING ONLY: this logs completed keypad PINs in plaintext. Remove this
+  # override or set it to "false" before production use.
+  keypad_debug_logging: "true"
+
+  # Optional Wiegand GPIO overrides. The remote firmware defaults to GPIO25
+  # for D0 and GPIO26 for D1, so these are normally unnecessary.
+  # garage_keypad_d0_pin: "GPIO25"
+  # garage_keypad_d1_pin: "GPIO26"
+
 packages:
   garage_keypad:
     url: https://github.com/CitizenRacer/GarageDoorWiegandKeypad
