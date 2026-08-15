@@ -18,6 +18,10 @@ ESPHome firmware for a classic ESP32-based garage door keypad controller. The co
 - Explicit Home Assistant API-client tracking so ESPHome log viewers do not affect the LED state
 - Home Assistant diagnostic entity showing the filtered HA API connection state
 - API client identity/address logging on connect and disconnect for diagnostics
+- Native Wiegand keypad input with configurable D0/D1 GPIO substitutions
+- 4-8 digit PIN collection with `#` submit, `*` clear, and 10-second timeout
+- Direct PIN submission to a Home Assistant validation script over the encrypted native API
+- Explicit keypad debug mode that can log completed PINs during bench testing
 - Wi-Fi signal sensor
 - Uptime sensor
 - ESP32 internal die-temperature diagnostic sensor
@@ -25,7 +29,7 @@ ESPHome firmware for a classic ESP32-based garage door keypad controller. The co
 - Firmware version exposed to Home Assistant
 - Remote restart button
 
-The ESPHome HTTP `web_server` is intentionally disabled. The keypad will eventually handle security-sensitive information, so normal management and telemetry use the encrypted native API instead of exposing an additional plaintext HTTP interface.
+The ESPHome HTTP `web_server` is intentionally disabled. The keypad handles security-sensitive information, so normal management and telemetry use the encrypted native API instead of exposing an additional plaintext HTTP interface.
 
 ## Bill of materials
 
@@ -104,6 +108,13 @@ substitutions:
   fallback_ap_password: !secret fallback_ap_password
   garage_keypad_api_encryption_key: !secret garage_keypad_api_encryption_key
 
+  # TESTING ONLY. Remove this override or set it false before production.
+  keypad_debug_logging: "true"
+
+  # Optional pin overrides; the remote package already defaults to these.
+  # garage_keypad_d0_pin: "GPIO25"
+  # garage_keypad_d1_pin: "GPIO26"
+
 packages:
   garage_keypad:
     url: https://github.com/CitizenRacer/GarageDoorWiegandKeypad
@@ -173,6 +184,83 @@ esp32:
 
 Using the silicon variant directly avoids unnecessary board-specific assumptions while remaining correct for this ESP32-WROOM-32 development board.
 
+## Wiegand keypad and PIN collection
+
+The S20-ID keypad feeds Wiegand D0 and D1 through the HiLetgo BSS138 level shifter before reaching the ESP32. The low-voltage / 3.3 V side of the level shifter uses these firmware defaults:
+
+```text
+D0 -> GPIO25
+D1 -> GPIO26
+```
+
+The GPIOs are substitutions rather than hard-coded values:
+
+```yaml
+substitutions:
+  garage_keypad_d0_pin: "GPIO25"
+  garage_keypad_d1_pin: "GPIO26"
+
+wiegand:
+  - id: garage_keypad_wiegand
+    d0: "${garage_keypad_d0_pin}"
+    d1: "${garage_keypad_d1_pin}"
+```
+
+If the wiring changes later, override either substitution in the local Device Builder wrapper without editing the remote firmware package.
+
+ESPHome's Wiegand component maps normal keypad values to `0-9`, `*`, and `#`. The key collector accepts numeric PINs from four through eight digits long. `#` submits the PIN, `*` clears the current entry, and an incomplete entry times out after ten seconds.
+
+```yaml
+key_collector:
+  - id: garage_keypad_pin
+    source_id: garage_keypad_wiegand
+    min_length: 4
+    max_length: 8
+    allowed_keys: "0123456789"
+    end_keys: "#"
+    end_key_required: true
+    clear_keys: "*"
+    timeout: 10s
+```
+
+A completed PIN is not exposed as a sensor or text sensor. It is sent transiently to Home Assistant over the encrypted native API:
+
+```yaml
+- homeassistant.action:
+    action: script.garage_keypad_validate_pin
+    data:
+      pin: !lambda |-
+        return x.str();
+```
+
+The ESP32 contains no authoritative PIN database and performs no local authorization. Home Assistant is expected to validate the submitted PIN and perform the garage-door action only for an authorized credential. Because opening the garage already depends on Home Assistant, there is intentionally no local fallback credential path.
+
+### Home Assistant action permission
+
+For PIN submission to work, open the Garage Keypad device in Home Assistant's ESPHome integration and enable **Allow the device to perform Home Assistant actions**. Home Assistant must also provide an action/script named `script.garage_keypad_validate_pin` that accepts a `pin` field. Until that script is created, keypad input can still be tested through ESPHome logs, but submission to Home Assistant will not complete successfully.
+
+### Keypad debug logging
+
+The remote firmware defaults to:
+
+```yaml
+keypad_debug_logging: "false"
+```
+
+When that value is false, the PIN itself is not logged; ESPHome logs only the number of entered digits. During bench testing, the local Device Builder wrapper can override it with:
+
+```yaml
+keypad_debug_logging: "true"
+```
+
+With debug logging enabled, entering PIN `1234` produces a deliberately conspicuous warning such as:
+
+```text
+[W][keypad]: DEBUG MODE - PIN entered: [1234]
+```
+
+**This exposes real PINs in plaintext to ESPHome logs and any connected remote log viewer. Disable this override before production use.** The brackets around the PIN are intentional so the exact logged value is visually unambiguous while debugging.
+
 ## Security
 
 Home Assistant communicates with the keypad over ESPHome's native API. The remote firmware package consumes the encryption key as a substitution supplied by the local Device Builder configuration:
@@ -190,6 +278,8 @@ garage_keypad_api_encryption_key: !secret garage_keypad_api_encryption_key
 ```
 
 The plaintext ESPHome `web_server` component is intentionally not enabled. OTA updates remain protected by the separate `ota_password`, and the fallback Wi-Fi network has its own `fallback_ap_password`.
+
+Outside the explicit temporary keypad debug mode, completed PINs are not published as Home Assistant entity states and are not intentionally written to the ESPHome log. PIN values are passed as transient Home Assistant action data over the encrypted native API. The Home Assistant validation workflow should likewise be designed to avoid retaining PINs in logs, traces, or persistent entity state unnecessarily.
 
 ## Safe Mode recovery
 
@@ -283,8 +373,8 @@ Example:
 [api_client] Disconnected: client_info='Home Assistant 2026.x.x' address='10.0.0.x'
 ```
 
-These messages do not include the Noise PSK, Wi-Fi password, keypad credentials, or application payload data.
+These messages do not include the Noise PSK, Wi-Fi password, or application payload data. Keypad PINs are the one deliberate exception only when `keypad_debug_logging` is explicitly enabled for testing.
 
 ## Next steps
 
-Once the keypad is connected, the firmware can be extended with the Wiegand interface, credential handling, garage-door actions, and Home Assistant status/control entities. Security-sensitive values should remain local to the device/Home Assistant wherever practical and should not be emitted into logs or exposed as unnecessary entities.
+Create the Home Assistant-side `script.garage_keypad_validate_pin` workflow, define the runtime-manageable PIN database, and connect successful authorization to the existing garage-door control mechanism. The validation workflow should identify authorized users without retaining plaintext PINs in persistent Home Assistant state or routine logs.
