@@ -1,0 +1,65 @@
+# Home Assistant script fragment for Garage Door Wiegand Keypad.
+#
+# This file is intended to be loaded as file-based Home Assistant YAML (or
+# merged into an existing file-based scripts configuration). It deliberately
+# uses !secret and therefore should not be pasted into the Home Assistant UI
+# script editor.
+#
+# Required entries in the Home Assistant configuration-directory secrets.yaml:
+#
+# garage_keypad_pins:
+#   "1234": "Example User"
+#   "5678": "Example Guest"
+# garage_keypad_garage_entity: "cover.your_garage_door"
+#
+# Keep PIN keys quoted so leading zeroes are preserved.
+
+garage_keypad_validate_pin:
+  alias: Garage Keypad - Validate PIN
+  description: >-
+    Validate a PIN submitted by the ESPHome garage keypad and open the garage
+    door when it matches an authorized entry in garage_keypad_pins.
+  mode: queued
+  max: 10
+
+  # PIN values arrive as script input and would otherwise be retained in script
+  # traces. Do not persist traces for this security-sensitive script.
+  trace:
+    stored_traces: 0
+
+  fields:
+    pin:
+      name: PIN
+      description: PIN submitted transiently by the ESPHome keypad.
+      required: true
+      selector:
+        text:
+
+  variables:
+    # The entire authorization map lives in Home Assistant's local secrets.yaml.
+    # The map is PIN -> friendly name, for example "1234": "Jonathan".
+    keypad_pins: !secret garage_keypad_pins
+
+  sequence:
+    - choose:
+        - conditions:
+            - condition: template
+              value_template: "{{ (pin | string) in keypad_pins }}"
+          sequence:
+            - action: cover.open_cover
+              target:
+                entity_id: !secret garage_keypad_garage_entity
+
+            # Record only the friendly credential name. Never put the PIN in
+            # logbook data, entity state, or an event payload.
+            - action: logbook.log
+              data:
+                name: Garage Keypad
+                message: >-
+                  Access granted: {{ keypad_pins.get(pin | string, "Unknown") }}
+
+      default:
+        - action: logbook.log
+          data:
+            name: Garage Keypad
+            message: Access denied: invalid PIN
