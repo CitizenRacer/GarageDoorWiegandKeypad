@@ -6,7 +6,7 @@
 # packages cannot perform !secret lookups, so the local Device Builder wrapper
 # supplies the credential substitutions from its local secrets.yaml file.
 substitutions:
-  firmware_version: "9"
+  firmware_version: "10"
 
   # Default ESP32 GPIOs for the low-voltage side of the Wiegand level shifter.
   # Physical wiring:
@@ -26,6 +26,15 @@ substitutions:
 esphome:
   name: garage-keypad
   friendly_name: Garage Keypad
+
+  # Log an explicit firmware version and readiness marker after ESPHome's
+  # components have completed initialization.
+  on_boot:
+    - priority: -100
+      then:
+        - lambda: |-
+            ESP_LOGI("startup", "Firmware version: %s", ESPHOME_PROJECT_VERSION);
+            ESP_LOGI("startup", "ready");
 
   # ESP-IDF eFuse/RNG APIs used for one-time BLK3 HMAC-key provisioning.
   # Angle-bracket includes are emitted directly into ESPHome's generated
@@ -67,12 +76,60 @@ api:
                 id(home_assistant_api_connections) += 1;
               }
     # A newly connected log viewer is not yet subscribed at the instant this
-    # callback fires. Delay the diagnostic message so the remote log stream has
-    # time to become active and can receive the client identity message.
+    # callback fires. Delay diagnostic messages so the remote log stream has
+    # time to become active and can receive them.
     - delay: 3s
     - lambda: |-
         ESP_LOGI("api_client", "Connected: client_info='%s' address='%s'",
                  client_info.c_str(), client_address.c_str());
+
+        constexpr size_t KEY_BYTES = 32;
+        constexpr size_t KEY_BITS = KEY_BYTES * 8;
+        const esp_efuse_coding_scheme_t scheme =
+            esp_efuse_get_coding_scheme(EFUSE_BLK3);
+        const bool read_protected = esp_efuse_get_key_dis_read(EFUSE_BLK3);
+        const bool write_protected = esp_efuse_get_key_dis_write(EFUSE_BLK3);
+
+        if (scheme != EFUSE_CODING_SCHEME_NONE) {
+          ESP_LOGW("hmac_status",
+                   "BLK3 status: coding scheme=%d; expected 256-bit NONE",
+                   static_cast<int>(scheme));
+        } else if (read_protected) {
+          ESP_LOGW("hmac_status",
+                   "BLK3 status: read-protected; HMAC key material cannot be inspected by firmware");
+        } else {
+          uint8_t block[KEY_BYTES] = {};
+          const esp_err_t err =
+              esp_efuse_read_block(EFUSE_BLK3, block, 0, KEY_BITS);
+          if (err != ESP_OK) {
+            ESP_LOGE("hmac_status", "BLK3 status read failed: %s",
+                     esp_err_to_name(err));
+          } else {
+            uint8_t block_or = 0;
+            for (size_t i = 0; i < KEY_BYTES; i++) {
+              block_or |= block[i];
+            }
+
+            volatile uint8_t *wipe = block;
+            for (size_t i = 0; i < KEY_BYTES; i++) {
+              wipe[i] = 0;
+            }
+
+            if (block_or != 0 && write_protected) {
+              ESP_LOGI("hmac_status",
+                       "BLK3 status: non-empty, write-protected, readable (expected provisioned HMAC key)");
+            } else if (block_or != 0) {
+              ESP_LOGW("hmac_status",
+                       "BLK3 status: non-empty but NOT write-protected");
+            } else if (write_protected) {
+              ESP_LOGE("hmac_status",
+                       "BLK3 status: empty and write-protected; key cannot be provisioned");
+            } else {
+              ESP_LOGW("hmac_status",
+                       "BLK3 status: empty and writable; HMAC key has not been provisioned");
+            }
+          }
+        }
   on_client_disconnected:
     # Update the LED state immediately.
     - if:
