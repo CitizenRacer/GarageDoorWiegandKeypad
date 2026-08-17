@@ -6,7 +6,7 @@
 # packages cannot perform !secret lookups, so the local Device Builder wrapper
 # supplies the credential substitutions from its local secrets.yaml file.
 substitutions:
-  firmware_version: "14"
+  firmware_version: "16"
 
   # Default ESP32 GPIOs for the low-voltage side of the Wiegand level shifter.
   # Physical wiring:
@@ -453,6 +453,24 @@ wiegand:
   - id: garage_keypad_wiegand
     d0: "${garage_keypad_d0_pin}"
     d1: "${garage_keypad_d1_pin}"
+
+    # ESPHome decodes and parity-checks 26-, 34-, and 37-bit Wiegand tags
+    # before firing on_tag. This is intentionally logging-only for now; RFID
+    # credentials do not operate the garage door or enter the PIN/HMAC path.
+    on_tag:
+      - lambda: |-
+          ESP_LOGI("rfid", "RFID tag received: %s", x.c_str());
+
+    # on_raw also sees keypad key frames. Never log 4- or 8-bit frames because
+    # they encode individual keypad keystrokes and could disclose PIN digits.
+    on_raw:
+      - lambda: |-
+          if (bits > 8) {
+            ESP_LOGI("rfid",
+                     "Wiegand RFID/raw frame: %u bits, value=0x%llX",
+                     static_cast<unsigned>(bits),
+                     static_cast<unsigned long long>(value));
+          }
 
 # Collect 4-8 numeric digits. '#' submits the PIN, '*' clears the current
 # entry, and an incomplete entry is discarded after ten seconds.
