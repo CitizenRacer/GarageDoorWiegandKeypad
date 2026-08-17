@@ -8,7 +8,7 @@ The controller is an **ESP32S 30-pin USB-C NodeMCU development board with ESP32-
 
 ## Current security design
 
-Live keypad validation is HMAC-only.
+Firmware v14 performs live keypad validation with a device-local HMAC verifier.
 
 ```text
 Keypad PIN
@@ -22,12 +22,21 @@ ESP32
    |
    | encrypted ESPHome native API
    v
-Home Assistant verifier map
+Home Assistant
+   |
+   | lookup in /config/garage_keypad_users.yaml
+   v
+friendly user / invalid credential
+   |
+   v
+notification-only test path
 ```
 
 The device-specific 256-bit HMAC key is stored in ESP32 eFuse **BLK3**, permanently write-protected, and intentionally left readable by firmware because this classic ESP32 has no dedicated hardware HMAC peripheral.
 
 Home Assistant stores only HMAC verifier-to-user mappings. Plaintext PINs are not intentionally logged, published as ESPHome entities, stored in the Home Assistant authorization map, or sent over the ESPHome API during normal keypad use.
+
+**The current Home Assistant validation path is deliberately notification-only and does not open the garage door.** This is the safe v14 end-to-end test configuration.
 
 See [`docs/HMAC_PIN_DESIGN.md`](docs/HMAC_PIN_DESIGN.md) for the complete threat model, design rationale, migration history, and limitations.
 
@@ -45,10 +54,10 @@ See [`docs/HMAC_PIN_DESIGN.md`](docs/HMAC_PIN_DESIGN.md) for the complete threat
 - 4-8 digit PIN collection with `#` submit, `*` clear, and 10-second timeout
 - Device-local HMAC-SHA256 PIN transformation
 - 256-bit device key in write-protected ESP32 eFuse BLK3
-- HMAC-only Home Assistant authorization map
-- Administrative PIN-to-HMAC generator action
-- Friendly-name access logging without PIN/HMAC disclosure
-- Script trace storage disabled for credential validation
+- File-backed HMAC verifier-to-user map in Home Assistant
+- Administrative PIN-to-HMAC generator action and Home Assistant helper script
+- Notification-only valid/invalid credential test path
+- Script trace storage disabled anywhere verifier/PIN material is handled by the checked-in Home Assistant scripts
 - Wi-Fi signal, uptime, die temperature, IP, SSID, MAC, and firmware diagnostics
 
 The ESPHome HTTP `web_server` is intentionally disabled. Management and telemetry use the encrypted native API instead of exposing an additional plaintext HTTP interface.
@@ -68,6 +77,7 @@ GarageDoorWiegandKeypad/
 │   └── secrets.example.yaml
 └── homeassistant/
     ├── garage-keypad-script.yaml
+    ├── garage-keypad-users.example.yaml
     └── secrets.example.yaml
 ```
 
@@ -110,7 +120,7 @@ substitutions:
   fallback_ap_password: !secret fallback_ap_password
   garage_keypad_api_encryption_key: !secret garage_keypad_api_encryption_key
 
-  # Testing only. This now logs HMAC verifiers, never plaintext PINs.
+  # Testing only. v14 logs HMAC verifiers, never plaintext keypad PINs.
   keypad_debug_logging: "true"
 
 packages:
@@ -147,6 +157,8 @@ Keep any trailing `=` padding.
 ## Firmware versioning and updates
 
 `esphome/garage-keypad.yaml` contains an integer `firmware_version` substitution. Every repository check-in that modifies that file increments the version by one.
+
+The current checked-in firmware is **v14**.
 
 The device logs its firmware version and `ready` after initialization and again after an API client connects so remote log viewers can reliably see the version.
 
@@ -188,49 +200,86 @@ On submission, firmware computes:
 HMAC-SHA256(BLK3 key, exact PIN string)
 ```
 
-and sends only the 64-character lowercase hexadecimal verifier to:
+and sends only the 64-character lowercase hexadecimal verifier to the Home Assistant script.
+
+### Firmware-to-Home-Assistant interface contract
+
+This exact interface is part of the v14 contract and should remain synchronized between firmware and Home Assistant:
 
 ```text
-script.garage_keypad_validate_hmac
+script: script.garage_keypad_validate_hmac
+field:  hmac
+value:  64-character lowercase HMAC-SHA256 verifier
 ```
 
-with:
+Equivalent ESPHome action call:
 
 ```yaml
-hmac: <64-character verifier>
+action: script.garage_keypad_validate_hmac
+data:
+  hmac: <64-character verifier>
 ```
 
-If HMAC generation fails, the firmware fails closed and the Home Assistant script receives an invalid/empty verifier that cannot authorize the door.
+If HMAC generation fails, the firmware fails closed and supplies an invalid/empty verifier that cannot authorize.
 
-The ESP32 does not contain the user authorization database and does not make the authorization decision locally.
+The ESP32 does not contain the user authorization database and does not make the user-mapping decision locally.
 
 ### Home Assistant action permission
 
 Enable **Allow the device to perform Home Assistant actions** for the Garage Keypad ESPHome integration entry.
 
-## Home Assistant authorization
+## Home Assistant authorization map
 
-The repository file [`homeassistant/garage-keypad-script.yaml`](homeassistant/garage-keypad-script.yaml) defines:
+The live verifier map is a dedicated local file:
+
+```text
+/config/garage_keypad_users.yaml
+```
+
+Use [`homeassistant/garage-keypad-users.example.yaml`](homeassistant/garage-keypad-users.example.yaml) as the template:
+
+```yaml
+"<64-character HMAC>": "Example User"
+"<64-character HMAC>": "Example Guest"
+```
+
+The mapping is **HMAC verifier -> friendly user name**. Plaintext PINs do not belong in this file.
+
+The map was intentionally moved out of `secrets.yaml`. It is still sensitive authorization data and should not be committed, but a disclosure of this file alone does not include the ESP32-held HMAC key needed for ordinary offline PIN enumeration.
+
+The checked-in Home Assistant script uses `file.read_file` with YAML decoding to load this map for each validation attempt.
+
+## Current notification-only validation path
+
+[`homeassistant/garage-keypad-script.yaml`](homeassistant/garage-keypad-script.yaml) defines the canonical firmware-facing script:
 
 ```text
 script.garage_keypad_validate_hmac
 ```
 
-The local Home Assistant secret map is:
+It accepts:
 
 ```yaml
-garage_keypad_hmacs:
-  "<64-character HMAC>": "Example User"
-  "<64-character HMAC>": "Example Guest"
-
-garage_keypad_garage_entity: "cover.your_garage_door"
+hmac: <64-character verifier>
 ```
 
-The mapping is **HMAC verifier -> friendly user name**. Plaintext PINs do not belong in this map.
+For a matching verifier, it sends:
 
-For an authorized verifier, the script opens the configured garage cover and writes a logbook entry containing only the friendly user name. Invalid submissions are logged generically as invalid credentials.
+```text
+Valid Code for User "<friendly name>"
+```
 
-The script disables stored traces:
+For a non-matching verifier, it sends an invalid-code notification.
+
+**It contains no `cover.open_cover` action and cannot open the garage door.** That is intentional during v14 end-to-end testing.
+
+The notification action name is kept in local Home Assistant `secrets.yaml`:
+
+```yaml
+garage_keypad_notify_service: "notify.mobile_app_your_phone"
+```
+
+The validation script disables stored traces:
 
 ```yaml
 trace:
@@ -245,7 +294,7 @@ The firmware exposes the administrative ESPHome action:
 esphome.garage_keypad_generate_pin_hmac
 ```
 
-Example Home Assistant action call:
+Example direct Home Assistant action call:
 
 ```yaml
 action: esphome.garage_keypad_generate_pin_hmac
@@ -255,9 +304,32 @@ data:
 
 The PIN must be supplied as a string so leading zeroes are preserved.
 
-The device returns a 64-character lowercase HMAC-SHA256 verifier and also publishes the latest administratively generated verifier to the **Generated PIN HMAC** diagnostic text sensor for convenient copying.
+The device returns a 64-character lowercase HMAC-SHA256 verifier and publishes the latest administratively generated verifier to the **Generated PIN HMAC** diagnostic text sensor for convenient copying.
+
+The checked-in Home Assistant scripts also provide a wrapper:
+
+```text
+script.garage_keypad_generate_pin_hmac
+```
+
+That wrapper returns the ESP32 response and has stored traces disabled because its input is a plaintext provisioning PIN.
 
 The BLK3 key itself is never returned.
+
+## v14 end-to-end test procedure
+
+Use this procedure when validating the HMAC cutover. It is deliberately safe to run without operating the garage door.
+
+1. Confirm the device reports **Firmware Version 14** and the BLK3 status is provisioned/write-protected/readable.
+2. Confirm Home Assistant has `script.garage_keypad_validate_hmac` loaded and the notification-only checked-in behavior is installed.
+3. Confirm `/config/garage_keypad_users.yaml` contains the authorized verifier-to-user entries and no plaintext PINs.
+4. Enter each authorized keypad code normally and submit with `#`.
+5. Confirm a notification identifying the friendly user arrives for each authorized code.
+6. Enter one unrecognized/fake code and confirm the invalid-code notification arrives.
+7. Confirm no garage-cover action occurs during the entire test.
+8. If troubleshooting, temporarily enable `keypad_debug_logging: "true"` and compare the logged verifier with the local map; disable it when finished.
+
+Do not record actual PINs or live HMAC verifiers in issues, commits, screenshots, or test documentation.
 
 ## Debug logging
 
@@ -273,7 +345,7 @@ Normal keypad entry still does **not** log plaintext PINs. Debug mode logs only 
 DEBUG MODE - PIN HMAC: [<64 hex characters>]
 ```
 
-HMAC verifiers are still security-sensitive authorization material, so disable debug logging when it is not needed.
+HMAC verifiers are authorization material, so disable debug logging when it is not needed.
 
 ## Security boundary
 
