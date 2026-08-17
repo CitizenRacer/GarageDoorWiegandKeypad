@@ -1,61 +1,66 @@
 # Garage Door Keypad
 
-ESPHome firmware and Home Assistant configuration for a classic ESP32-based garage door Wiegand keypad controller. The controller is an **ESP32S 30-pin USB-C NodeMCU development board with ESP32-WROOM-32 and CP2102**. The detected SoC is an **ESP32-D0WD-V3**.
+ESPHome firmware and Home Assistant configuration for a classic ESP32-based garage door Wiegand keypad controller.
 
-**GitHub `main` is the authoritative firmware/configuration source.** ESPHome Device Builder keeps only a small local wrapper containing references to its local secrets and loads the actual firmware from this repository as a remote Git package.
+The controller is an **ESP32S 30-pin USB-C NodeMCU development board with ESP32-WROOM-32 and CP2102**. The detected SoC is an **ESP32-D0WD-V3**.
+
+**GitHub `main` is the authoritative firmware/configuration source.** ESPHome Device Builder keeps only a small local wrapper containing secret substitutions and loads the firmware from this repository as a remote Git package.
+
+## Current security design
+
+Live keypad validation is HMAC-only.
+
+```text
+Keypad PIN
+   |
+   v
+ESP32
+   |
+   | HMAC-SHA256(BLK3 device key, PIN)
+   v
+64-character verifier
+   |
+   | encrypted ESPHome native API
+   v
+Home Assistant verifier map
+```
+
+The device-specific 256-bit HMAC key is stored in ESP32 eFuse **BLK3**, permanently write-protected, and intentionally left readable by firmware because this classic ESP32 has no dedicated hardware HMAC peripheral.
+
+Home Assistant stores only HMAC verifier-to-user mappings. Plaintext PINs are not intentionally logged, published as ESPHome entities, stored in the Home Assistant authorization map, or sent over the ESPHome API during normal keypad use.
+
+See [`docs/HMAC_PIN_DESIGN.md`](docs/HMAC_PIN_DESIGN.md) for the complete threat model, design rationale, migration history, and limitations.
 
 ## Current features
 
 - GitHub-backed ESPHome remote-package workflow
 - Wi-Fi connectivity
-- ESPHome native API for Home Assistant with Noise encryption
-- Password-protected ESPHome OTA firmware updates
-- Explicit ESPHome Safe Mode recovery after repeated boot failures
-- Home Assistant button to restart directly into Safe Mode
-- Fallback Wi-Fi access point with its own password
-- GPIO2 blue connection-status LED with distinct Wi-Fi and Home Assistant states
-- Intentional suppression of ESPHome's GPIO2 strapping-pin warning for the onboard LED
-- Explicit Home Assistant API-client tracking so ESPHome log viewers do not affect the LED state
-- Home Assistant diagnostic entity showing the filtered HA API connection state
-- API client identity/address logging on connect and disconnect for diagnostics
-- Native Wiegand keypad input with configurable D0/D1 GPIO substitutions
+- ESPHome native API with Noise encryption
+- Password-protected OTA updates
+- Explicit ESPHome Safe Mode recovery
+- Fallback Wi-Fi AP with its own password
+- GPIO2 blue connection-status LED
+- Home Assistant API-client tracking
+- Native Wiegand keypad input
 - 4-8 digit PIN collection with `#` submit, `*` clear, and 10-second timeout
-- Direct PIN submission to Home Assistant over the encrypted native API
-- Home Assistant-side PIN authorization map stored in local `secrets.yaml`
-- Home Assistant validation script that opens the configured garage door only for authorized PINs
-- Friendly-name access logging without recording the submitted PIN
-- Script trace storage disabled for the security-sensitive PIN validation script
-- Explicit keypad debug mode that can log completed PINs during bench testing
-- Wi-Fi signal, uptime, ESP32 die temperature, IP address, SSID, MAC, and firmware-version diagnostics
+- Device-local HMAC-SHA256 PIN transformation
+- 256-bit device key in write-protected ESP32 eFuse BLK3
+- HMAC-only Home Assistant authorization map
+- Administrative PIN-to-HMAC generator action
+- Friendly-name access logging without PIN/HMAC disclosure
+- Script trace storage disabled for credential validation
+- Wi-Fi signal, uptime, die temperature, IP, SSID, MAC, and firmware diagnostics
 
-The ESPHome HTTP `web_server` is intentionally disabled. The keypad handles security-sensitive information, so normal management and telemetry use the encrypted native API instead of exposing an additional plaintext HTTP interface.
-
-## Bill of materials
-
-| Qty | Part | Purpose | Link |
-|---:|---|---|---|
-| 1 | **S20-ID IP68 Wiegand keypad / RFID reader** | Outdoor keypad and 125 kHz ID credential reader; provides Wiegand D0/D1 | [Amazon](https://amzn.to/4zhUrBZ) |
-| 1 | **ESP32S 30-pin USB-C ESP32-WROOM-32 development board** | Main controller running ESPHome | [Amazon](https://amzn.to/4wNM9PX) |
-| 1 | **eletechsup ES350+485 30-pin ESP32 expansion / terminal board** | Screw-terminal carrier and convenient GPIO/power breakout | [Amazon](https://amzn.to/3SA5LZx) |
-| 1 | **MEAN WELL HDR-30-12 DIN-rail power supply** | 120 VAC project power supply providing 12 V DC | [Amazon](https://amzn.to/4zhTsSj) |
-| 1 | **HiLetgo 4-channel BSS138 bidirectional logic level shifter** | Level shifts Wiegand D0/D1 for the 3.3 V ESP32 | [Amazon](https://amzn.to/4geWuy3) |
-| As needed | **4-conductor 22 AWG security wire, in-wall rated** | In-wall cable between keypad and project enclosure | [Amazon](https://amzn.to/3TZ253Y) |
-| As needed | **18 AWG stranded wire** | Internal project power wiring | [Amazon](https://amzn.to/4wEJs36) |
-| 1 | **AC power cable** | Mains input cable for the enclosure | [Amazon](https://amzn.to/4ze44kZ) |
-| 1 | **Project box / enclosure** | Houses the power supply, controller, level shifter, DIN rail, and terminals | [Amazon](https://amzn.to/4wyDtg6) |
-| As needed | **35 mm DIN rail** | Internal mounting rail | [Amazon](https://amzn.to/4wNLYEh) |
-| As needed | **DIN-rail wire connectors / terminal blocks** | Organized power and signal distribution | [Amazon](https://amzn.to/4qj1sy7) |
-| 1 | **3D-printed level-shifter DIN holder** | Mounts the HiLetgo level-shifter PCB | [`cad/HiLetgo_Level_Shifter_DIN_CableClamp.scad`](cad/HiLetgo_Level_Shifter_DIN_CableClamp.scad) |
+The ESPHome HTTP `web_server` is intentionally disabled. Management and telemetry use the encrypted native API instead of exposing an additional plaintext HTTP interface.
 
 ## Repository structure
 
 ```text
 GarageDoorWiegandKeypad/
 ├── README.md
-├── .gitignore
 ├── cad/
-│   └── HiLetgo_Level_Shifter_DIN_CableClamp.scad
 ├── docs/
+│   ├── HMAC_PIN_DESIGN.md
 │   └── images/
 ├── esphome/
 │   ├── garage-keypad.yaml
@@ -66,11 +71,36 @@ GarageDoorWiegandKeypad/
     └── secrets.example.yaml
 ```
 
+## Hardware and wiring
+
+The S20-ID keypad feeds Wiegand D0 and D1 through the HiLetgo BSS138 level shifter before reaching the ESP32.
+
+Current default wiring:
+
+```text
+Keypad Green D0 -> level shifter HV3/LV3 -> GPIO22
+Keypad White D1 -> level shifter HV2/LV2 -> GPIO19
+```
+
+These pins are substitutions and can be overridden from the local Device Builder wrapper if the physical wiring changes.
+
+### Major hardware
+
+| Qty | Part | Purpose |
+|---:|---|---|
+| 1 | S20-ID IP68 Wiegand keypad / RFID reader | Outdoor keypad and Wiegand source |
+| 1 | ESP32S 30-pin ESP32-WROOM-32 board | Controller |
+| 1 | eletechsup ES350+485 30-pin expansion board | Screw-terminal carrier |
+| 1 | MEAN WELL HDR-30-12 | 12 V DIN-rail power supply |
+| 1 | HiLetgo 4-channel BSS138 level shifter | Wiegand level shifting |
+| As needed | 4-conductor 22 AWG security wire | Keypad-to-controller cable |
+| As needed | 18 AWG stranded wire | Internal power wiring |
+
 ## ESPHome Device Builder setup
 
-ESPHome remote Git packages cannot perform `!secret` lookups inside the remote package. The firmware in `esphome/garage-keypad.yaml` therefore uses substitutions. A small configuration kept locally in Device Builder maps those substitutions to Device Builder's local `secrets.yaml`.
+The remote firmware uses substitutions because remote Git packages cannot directly read the local Device Builder `secrets.yaml`.
 
-Use [`esphome/device-builder-wrapper.example.yaml`](esphome/device-builder-wrapper.example.yaml) as the local Garage Keypad configuration in Device Builder:
+A local wrapper should provide:
 
 ```yaml
 substitutions:
@@ -80,12 +110,8 @@ substitutions:
   fallback_ap_password: !secret fallback_ap_password
   garage_keypad_api_encryption_key: !secret garage_keypad_api_encryption_key
 
-  # TESTING ONLY. Remove this override or set it false before production.
+  # Testing only. This now logs HMAC verifiers, never plaintext PINs.
   keypad_debug_logging: "true"
-
-  # Optional pin overrides; the remote package defaults to these.
-  # garage_keypad_d0_pin: "GPIO25"
-  # garage_keypad_d1_pin: "GPIO26"
 
 packages:
   garage_keypad:
@@ -93,14 +119,14 @@ packages:
     ref: main
     files:
       - esphome/garage-keypad.yaml
-    refresh: 5min
+    refresh: 60s
 ```
 
-The repository is public, so no GitHub credentials are required. `ref: main` makes Device Builder consume the current `main` branch.
+The remote firmware defaults `keypad_debug_logging` to `false`.
 
 ### ESPHome secrets
 
-Keep these values in ESPHome Device Builder's local `secrets.yaml`:
+Keep these values only in the Device Builder's local `secrets.yaml`:
 
 ```yaml
 wifi_ssid: "YOUR_WIFI_NAME"
@@ -116,163 +142,158 @@ Generate the API encryption key with:
 openssl rand -base64 32
 ```
 
-Keep the complete Base64 value, including any trailing `=` padding. Never commit real credentials.
+Keep any trailing `=` padding.
 
-### Normal firmware update workflow
+## Firmware versioning and updates
 
-1. Firmware changes are committed to `main`.
-2. Every check-in that modifies `esphome/garage-keypad.yaml` increments its integer `firmware_version` by one.
-3. Device Builder loads the local wrapper and the GitHub package.
-4. Compile and install, normally over OTA.
-5. The **Firmware Version** diagnostic entity in Home Assistant reports the installed project version.
+`esphome/garage-keypad.yaml` contains an integer `firmware_version` substitution. Every repository check-in that modifies that file increments the version by one.
 
-## ESP32 target
+The device logs its firmware version and `ready` after initialization and again after an API client connects so remote log viewers can reliably see the version.
 
-The hardware reports:
+The normal update flow is:
+
+1. Commit firmware changes to `main`.
+2. Device Builder refreshes the remote package.
+3. Compile and install, normally OTA.
+4. Verify the **Firmware Version** diagnostic entity/log output.
+
+## BLK3 HMAC key
+
+The firmware provisions a device-specific 256-bit random key into classic ESP32 eFuse BLK3.
+
+Provisioning:
+
+- waits for Wi-Fi so the RF entropy source is active;
+- requires the normal 256-bit uncoded BLK3 scheme;
+- refuses to overwrite non-empty BLK3;
+- verifies the burn before write protection;
+- permanently write-protects BLK3;
+- never logs the key.
+
+A correctly provisioned controller reports:
 
 ```text
-ESP32-D0WD-V3
+HMAC key already provisioned; BLK3 is write-protected and readable
 ```
 
-The firmware therefore targets the original/classic ESP32 directly:
+The key is intentionally readable by firmware. See the HMAC design document for the threat-model implications.
 
-```yaml
-esp32:
-  variant: esp32
-  framework:
-    type: esp-idf
-```
+## Keypad processing
 
-## Wiegand keypad wiring and PIN collection
+The key collector accepts 4-8 numeric digits. `#` submits, `*` clears, and incomplete entry times out after ten seconds.
 
-The S20-ID keypad feeds Wiegand D0 and D1 through the HiLetgo BSS138 level shifter before reaching the ESP32. The default ESP32-side pins are:
+On submission, firmware computes:
 
 ```text
-D0 -> GPIO25
-D1 -> GPIO26
+HMAC-SHA256(BLK3 key, exact PIN string)
 ```
 
-They are substitutions and can be overridden from the local Device Builder wrapper:
+and sends only the 64-character lowercase hexadecimal verifier to:
+
+```text
+script.garage_keypad_validate_hmac
+```
+
+with:
 
 ```yaml
-substitutions:
-  garage_keypad_d0_pin: "GPIO25"
-  garage_keypad_d1_pin: "GPIO26"
+hmac: <64-character verifier>
 ```
 
-The key collector accepts numeric PINs from four through eight digits long. `#` submits, `*` clears the current entry, and an incomplete entry times out after ten seconds.
+If HMAC generation fails, the firmware fails closed and the Home Assistant script receives an invalid/empty verifier that cannot authorize the door.
 
-```yaml
-key_collector:
-  - id: garage_keypad_pin
-    source_id: garage_keypad_wiegand
-    min_length: 4
-    max_length: 8
-    allowed_keys: "0123456789"
-    end_keys: "#"
-    end_key_required: true
-    clear_keys: "*"
-    timeout: 10s
-```
-
-A completed PIN is not exposed as a sensor or text sensor. ESPHome passes it transiently to Home Assistant:
-
-```yaml
-- homeassistant.action:
-    action: script.garage_keypad_validate_pin
-    data:
-      pin: !lambda |-
-        return x.str();
-```
-
-The ESP32 contains no authoritative PIN database and performs no local authorization. There is intentionally no local fallback path.
+The ESP32 does not contain the user authorization database and does not make the authorization decision locally.
 
 ### Home Assistant action permission
 
-For PIN submission to work, enable **Allow the device to perform Home Assistant actions** for the Garage Keypad ESPHome integration entry.
+Enable **Allow the device to perform Home Assistant actions** for the Garage Keypad ESPHome integration entry.
 
-## Home Assistant PIN validation
+## Home Assistant authorization
 
-The repository contains [`homeassistant/garage-keypad-script.yaml`](homeassistant/garage-keypad-script.yaml). It defines `script.garage_keypad_validate_pin`, which is the action called by the ESP32.
+The repository file [`homeassistant/garage-keypad-script.yaml`](homeassistant/garage-keypad-script.yaml) defines:
 
-The script intentionally remains **file-based YAML** because it uses `!secret`. It is provided in GitHub only; adding the file to this repository does not modify or install anything in a running Home Assistant instance.
+```text
+script.garage_keypad_validate_hmac
+```
 
-### PIN map
-
-Add the equivalent of the following to Home Assistant's local `/config/secrets.yaml`:
+The local Home Assistant secret map is:
 
 ```yaml
-garage_keypad_pins:
-  "1234": "Example User"
-  "5678": "Example Guest"
+garage_keypad_hmacs:
+  "<64-character HMAC>": "Example User"
+  "<64-character HMAC>": "Example Guest"
 
 garage_keypad_garage_entity: "cover.your_garage_door"
 ```
 
-See [`homeassistant/secrets.example.yaml`](homeassistant/secrets.example.yaml) for the repository-safe example.
+The mapping is **HMAC verifier -> friendly user name**. Plaintext PINs do not belong in this map.
 
-The mapping is **PIN -> friendly name**. Keep every PIN quoted so a PIN such as `0420` remains exactly `0420` rather than being interpreted as a number.
+For an authorized verifier, the script opens the configured garage cover and writes a logbook entry containing only the friendly user name. Invalid submissions are logged generically as invalid credentials.
 
-Changing the PIN map is entirely a Home Assistant configuration change; it does not require recompiling or reflashing the ESP32.
-
-### Validation behavior
-
-For an authorized PIN, the script:
-
-1. Looks up the submitted string in `garage_keypad_pins`.
-2. Calls `cover.open_cover` for `garage_keypad_garage_entity`.
-3. Writes a logbook entry containing only the friendly credential name.
-
-For an invalid PIN, it records only `Access denied: invalid PIN` and does not operate the garage door.
-
-The script sets:
+The script disables stored traces:
 
 ```yaml
 trace:
   stored_traces: 0
 ```
 
-because the submitted PIN is an input variable and should not be retained in Home Assistant script traces. Home Assistant's own documentation also warns that values referenced through `!secret` in scripts/automations can be visible to Home Assistant administrators in source/trace views, so administrator access should be treated as trusted access.
+## Generating a verifier for a PIN
 
-### Loading the file
+The firmware exposes the administrative ESPHome action:
 
-The file is shaped like a normal file-based `scripts.yaml` fragment: its top level is the script ID `garage_keypad_validate_pin`. It can be merged into an existing file-based script configuration or included using Home Assistant's YAML include mechanisms. Because `!secret` is used, it should not be pasted into the UI script YAML editor.
-
-No Home Assistant installation changes are performed by this repository.
-
-## Keypad debug logging
-
-The remote firmware defaults to:
-
-```yaml
-keypad_debug_logging: "false"
+```text
+esphome.garage_keypad_generate_pin_hmac
 ```
 
-During bench testing, the local Device Builder wrapper can override it with:
+Example Home Assistant action call:
+
+```yaml
+action: esphome.garage_keypad_generate_pin_hmac
+data:
+  pin: "0123"
+```
+
+The PIN must be supplied as a string so leading zeroes are preserved.
+
+The device returns a 64-character lowercase HMAC-SHA256 verifier and also publishes the latest administratively generated verifier to the **Generated PIN HMAC** diagnostic text sensor for convenient copying.
+
+The BLK3 key itself is never returned.
+
+## Debug logging
+
+The local wrapper can temporarily set:
 
 ```yaml
 keypad_debug_logging: "true"
 ```
 
-Entering PIN `1234` then produces a deliberately conspicuous warning:
+Normal keypad entry still does **not** log plaintext PINs. Debug mode logs only the resulting HMAC verifier:
 
 ```text
-[W][keypad]: DEBUG MODE - PIN entered: [1234]
+DEBUG MODE - PIN HMAC: [<64 hex characters>]
 ```
 
-**This exposes real PINs in plaintext to ESPHome logs and any connected remote log viewer. Disable debug logging before production use.**
+HMAC verifiers are still security-sensitive authorization material, so disable debug logging when it is not needed.
 
-## Security
+## Security boundary
 
-Home Assistant communicates with the keypad over ESPHome's encrypted native API. The plaintext ESPHome `web_server` component is intentionally not enabled. OTA updates use a separate password, and the fallback Wi-Fi network has its own password.
+This design is primarily intended to mitigate configuration and backup disclosure.
 
-Outside explicit temporary keypad debug mode, completed PINs are not published as Home Assistant entity states and are not intentionally written to the ESPHome log. The Home Assistant validation script does not include submitted PINs in logbook messages and stores zero script traces.
+It protects against a leaked Home Assistant verifier map immediately revealing PINs or supporting ordinary offline PIN enumeration without the separate ESP32-held key.
 
-`secrets.yaml` separates sensitive values from shareable YAML but is not itself encrypted. Never commit the real Home Assistant or ESPHome secrets files.
+It does **not** claim to protect against:
+
+- full compromise of the ESP32 firmware;
+- full compromise of Home Assistant;
+- physical observation of PIN entry;
+- interception of Wiegand digits before the ESP32;
+- a malicious firmware image that can read BLK3 and keypad input.
+
+See [`docs/HMAC_PIN_DESIGN.md`](docs/HMAC_PIN_DESIGN.md) for details.
 
 ## Safe Mode recovery
 
-ESPHome Safe Mode is explicitly configured:
+ESPHome Safe Mode is configured as:
 
 ```yaml
 safe_mode:
@@ -281,24 +302,16 @@ safe_mode:
   reboot_timeout: 10min
 ```
 
-After five failed boot attempts, ESPHome enters Safe Mode while retaining networking, logging, and OTA. If ESPHome cannot boot at all, the ESP32 ROM bootloader remains available: hold **BOOT**, press and release **EN/RST**, then release **BOOT** for USB recovery.
+After repeated boot failures, ESPHome retains networking, logging, and OTA in Safe Mode. USB ROM-bootloader recovery remains available if needed.
 
-## Onboard LEDs
+## Blue status LED
 
-### Red power LED
+The onboard GPIO2 LED indicates connectivity:
 
-The red LED is the board's hardware power indicator and is not software controlled.
-
-### Blue status LED
-
-The onboard blue/user LED is on **GPIO2**:
-
-- **500 ms on / 500 ms off:** Wi-Fi disconnected/searching.
-- **Double blink + pause:** Wi-Fi connected, Home Assistant not connected.
-- **Solid blue:** Home Assistant connected to the encrypted native API.
-
-GPIO2 is an ESP32 boot strapping pin. The firmware uses the board's existing onboard LED without adding an external pull-up/down and explicitly suppresses ESPHome's intentional-use strapping warning.
+- **500 ms on / 500 ms off:** Wi-Fi disconnected/searching
+- **Double blink + pause:** Wi-Fi connected, Home Assistant not connected
+- **Solid blue:** Home Assistant connected to the encrypted API
 
 ## Diagnostics
 
-The ESP32 exposes Home Assistant connection state, Wi-Fi signal, uptime, internal silicon temperature, IP address, connected SSID, Wi-Fi MAC address, firmware version, restart, and Safe Mode restart diagnostics. API client connection/disconnection logs identify the client without including credentials or application payloads.
+The device exposes Home Assistant connection state, Wi-Fi signal, uptime, ESP32 die temperature, IP address, SSID, MAC address, firmware version, restart, Safe Mode restart, and the administrative Generated PIN HMAC entity.
