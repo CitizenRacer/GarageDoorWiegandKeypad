@@ -6,7 +6,7 @@
 # packages cannot perform !secret lookups, so the local Device Builder wrapper
 # supplies the credential substitutions from its local secrets.yaml file.
 substitutions:
-  firmware_version: "16"
+  firmware_version: "17"
 
   # Default ESP32 GPIOs for the low-voltage side of the Wiegand level shifter.
   # Physical wiring:
@@ -440,7 +440,7 @@ safe_mode:
   reboot_timeout: 10min
 
 # ---------------------------------------------------------------------------
-# Garage keypad - Wiegand input and PIN collection
+# Garage keypad - Wiegand input and PIN/RFID processing
 # ---------------------------------------------------------------------------
 #
 # Connect the LOW-VOLTAGE / 3.3 V side of the level shifter as follows:
@@ -455,14 +455,104 @@ wiegand:
     d1: "${garage_keypad_d1_pin}"
 
     # ESPHome decodes and parity-checks 26-, 34-, and 37-bit Wiegand tags
-    # before firing on_tag. This is intentionally logging-only for now; RFID
-    # credentials do not operate the garage door or enter the PIN/HMAC path.
+    # before firing on_tag. Keep decoded-tag logging enabled while RFID support
+    # is being commissioned, then HMAC the decoded credential before sending it
+    # to Home Assistant. The plaintext RFID credential is never sent over the
+    # Home Assistant action call.
     on_tag:
       - lambda: |-
           ESP_LOGI("rfid", "RFID tag received: %s", x.c_str());
 
+      - homeassistant.action:
+          action: script.garage_keypad_validate_rfid_hmac
+          data:
+            hmac: !lambda |-
+              constexpr size_t KEY_BYTES = 32;
+              constexpr size_t KEY_BITS = KEY_BYTES * 8;
+              constexpr size_t DIGEST_BYTES = 32;
+              static constexpr char HEX[] = "0123456789abcdef";
+
+              const auto wipe = [](uint8_t *buffer, size_t length) {
+                volatile uint8_t *p = buffer;
+                while (length-- > 0) {
+                  *p++ = 0;
+                }
+              };
+
+              if (esp_efuse_get_coding_scheme(EFUSE_BLK3) !=
+                  EFUSE_CODING_SCHEME_NONE) {
+                ESP_LOGE("rfid_hmac", "Cannot validate RFID: BLK3 coding scheme is not 256-bit NONE");
+                return std::string("");
+              }
+
+              if (esp_efuse_get_key_dis_read(EFUSE_BLK3)) {
+                ESP_LOGE("rfid_hmac", "Cannot validate RFID: BLK3 is read-protected");
+                return std::string("");
+              }
+
+              if (!esp_efuse_get_key_dis_write(EFUSE_BLK3)) {
+                ESP_LOGE("rfid_hmac", "Cannot validate RFID: BLK3 key is not write-protected");
+                return std::string("");
+              }
+
+              uint8_t key[KEY_BYTES] = {};
+              esp_err_t err = esp_efuse_read_block(
+                  EFUSE_BLK3, key, 0, KEY_BITS);
+              if (err != ESP_OK) {
+                wipe(key, sizeof(key));
+                ESP_LOGE("rfid_hmac", "Cannot validate RFID: unable to read BLK3: %s",
+                         esp_err_to_name(err));
+                return std::string("");
+              }
+
+              uint8_t key_or = 0;
+              for (size_t i = 0; i < KEY_BYTES; i++) {
+                key_or |= key[i];
+              }
+              if (key_or == 0) {
+                wipe(key, sizeof(key));
+                ESP_LOGE("rfid_hmac", "Cannot validate RFID: BLK3 key is empty");
+                return std::string("");
+              }
+
+              const mbedtls_md_info_t *md_info =
+                  mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+              if (md_info == nullptr) {
+                wipe(key, sizeof(key));
+                ESP_LOGE("rfid_hmac", "Cannot validate RFID: SHA-256 is unavailable");
+                return std::string("");
+              }
+
+              uint8_t digest[DIGEST_BYTES] = {};
+              const int hmac_result = mbedtls_md_hmac(
+                  md_info,
+                  key,
+                  sizeof(key),
+                  reinterpret_cast<const unsigned char *>(x.data()),
+                  x.size(),
+                  digest);
+              wipe(key, sizeof(key));
+
+              if (hmac_result != 0) {
+                wipe(digest, sizeof(digest));
+                ESP_LOGE("rfid_hmac", "Cannot validate RFID: HMAC-SHA256 calculation failed (%d)",
+                         hmac_result);
+                return std::string("");
+              }
+
+              char hex[DIGEST_BYTES * 2 + 1] = {};
+              for (size_t i = 0; i < DIGEST_BYTES; i++) {
+                hex[i * 2] = HEX[(digest[i] >> 4) & 0x0F];
+                hex[i * 2 + 1] = HEX[digest[i] & 0x0F];
+              }
+              hex[DIGEST_BYTES * 2] = '\0';
+              wipe(digest, sizeof(digest));
+
+              return std::string(hex);
+
     # on_raw also sees keypad key frames. Never log 4- or 8-bit frames because
     # they encode individual keypad keystrokes and could disclose PIN digits.
+    # RFID/raw frames remain logged during commissioning as requested.
     on_raw:
       - lambda: |-
           if (bits > 8) {

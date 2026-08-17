@@ -1,44 +1,74 @@
 # Garage Door Keypad
 
-ESPHome firmware and Home Assistant configuration for a classic ESP32-based garage door Wiegand keypad controller.
+ESPHome firmware and Home Assistant configuration for a classic ESP32-based garage-door Wiegand keypad/RFID controller.
 
 The controller is an **ESP32S 30-pin USB-C NodeMCU development board with ESP32-WROOM-32 and CP2102**. The detected SoC is an **ESP32-D0WD-V3**.
 
 **GitHub `main` is the authoritative firmware/configuration source.** ESPHome Device Builder keeps only a small local wrapper containing secret substitutions and loads the firmware from this repository as a remote Git package.
 
-## Current security design
+## Current release
 
-Firmware v14 performs live keypad validation with a device-local HMAC verifier.
+The current repository firmware is **v17**.
+
+v17 adds HMAC-protected RFID authorization while preserving the existing PIN path. Wiegand RFID credentials are decoded by ESPHome, logged during commissioning, transformed on the ESP32 with HMAC-SHA256 using the existing BLK3 device key, and sent to Home Assistant only as a 64-character verifier.
+
+The firmware version is exposed through the ESPHome project version and the **Firmware Version** diagnostic entity. `esphome/garage-keypad.yaml` increments `firmware_version` for every repository check-in of that file.
+
+## Security design
+
+### PIN path
 
 ```text
 Keypad PIN
    |
    v
-ESP32
+ESP32 key_collector
    |
-   | HMAC-SHA256(BLK3 device key, PIN)
+   | HMAC-SHA256(BLK3 device key, exact PIN string)
    v
 64-character verifier
    |
    | encrypted ESPHome native API
    v
-Home Assistant
+script.garage_keypad_validate_hmac
    |
-   | lookup in /config/garage_keypad_users.yaml
+   | top-level lookup in /config/garage_keypad_users.yaml
+   v
+friendly user / invalid credential
+```
+
+Plaintext PINs are not intentionally logged, published as ESPHome entities, stored in the Home Assistant authorization map, or sent over the ESPHome API during normal keypad use.
+
+### RFID path
+
+```text
+Wiegand RFID tag
+   |
+   v
+ESPHome Wiegand decoder
+   |
+   | decoded credential (temporarily logged during commissioning)
+   v
+HMAC-SHA256(BLK3 device key, exact decoded credential string)
+   |
+   | 64-character verifier over encrypted ESPHome API
+   v
+script.garage_keypad_validate_rfid_hmac
+   |
+   | nested rfid: lookup in /config/garage_keypad_users.yaml
    v
 friendly user / invalid credential
    |
-   v
-notification-only test path
+   +--> authorized: trigger established garage-opening automation
 ```
 
-The device-specific 256-bit HMAC key is stored in ESP32 eFuse **BLK3**, permanently write-protected, and intentionally left readable by firmware because this classic ESP32 has no dedicated hardware HMAC peripheral.
+The RFID verifier prevents the Home Assistant authorization file from containing raw RFID identifiers. It does **not** make a clonable static RFID credential cryptographically unclonable; the reader still receives the credential over Wiegand. See [`docs/RFID_ACCESS_DESIGN.md`](docs/RFID_ACCESS_DESIGN.md).
 
-Home Assistant stores only HMAC verifier-to-user mappings. Plaintext PINs are not intentionally logged, published as ESPHome entities, stored in the Home Assistant authorization map, or sent over the ESPHome API during normal keypad use.
+The device-specific 256-bit HMAC key is stored in ESP32 eFuse **BLK3**, permanently write-protected, and intentionally left readable by firmware because this classic ESP32 has no dedicated hardware HMAC peripheral. See [`docs/HMAC_PIN_DESIGN.md`](docs/HMAC_PIN_DESIGN.md).
 
-**The current Home Assistant validation path is deliberately notification-only and does not open the garage door.** This is the safe v14 end-to-end test configuration.
+## Threat-model note
 
-See [`docs/HMAC_PIN_DESIGN.md`](docs/HMAC_PIN_DESIGN.md) for the complete threat model, design rationale, migration history, and limitations.
+This HMAC design primarily hardens configuration and backup disclosure. If an attacker already controls Home Assistant, protecting the keypad validation path from that same attacker adds little garage-door security because Home Assistant itself already has the ability to operate the garage door.
 
 ## Current features
 
@@ -50,14 +80,15 @@ See [`docs/HMAC_PIN_DESIGN.md`](docs/HMAC_PIN_DESIGN.md) for the complete threat
 - Fallback Wi-Fi AP with its own password
 - GPIO2 blue connection-status LED
 - Home Assistant API-client tracking
-- Native Wiegand keypad input
+- Native Wiegand keypad and RFID input
 - 4-8 digit PIN collection with `#` submit, `*` clear, and 10-second timeout
 - Device-local HMAC-SHA256 PIN transformation
+- Device-local HMAC-SHA256 RFID transformation
 - 256-bit device key in write-protected ESP32 eFuse BLK3
-- File-backed HMAC verifier-to-user map in Home Assistant
+- One file-backed authorization database for PIN and RFID HMACs
+- RFID decoded/raw diagnostics without logging 4-bit or 8-bit keypad frames
 - Administrative PIN-to-HMAC generator action and Home Assistant helper script
-- Notification-only valid/invalid credential test path
-- Script trace storage disabled anywhere verifier/PIN material is handled by the checked-in Home Assistant scripts
+- Script trace storage disabled where PIN/RFID verifier material is handled
 - Wi-Fi signal, uptime, die temperature, IP, SSID, MAC, and firmware diagnostics
 
 The ESPHome HTTP `web_server` is intentionally disabled. Management and telemetry use the encrypted native API instead of exposing an additional plaintext HTTP interface.
@@ -70,6 +101,7 @@ GarageDoorWiegandKeypad/
 ├── cad/
 ├── docs/
 │   ├── HMAC_PIN_DESIGN.md
+│   ├── RFID_ACCESS_DESIGN.md
 │   └── images/
 ├── esphome/
 │   ├── garage-keypad.yaml
@@ -120,8 +152,8 @@ substitutions:
   fallback_ap_password: !secret fallback_ap_password
   garage_keypad_api_encryption_key: !secret garage_keypad_api_encryption_key
 
-  # Testing only. v14 logs HMAC verifiers, never plaintext keypad PINs.
-  keypad_debug_logging: "true"
+  # Testing only. This logs PIN HMAC verifiers, never plaintext keypad PINs.
+  keypad_debug_logging: "false"
 
 packages:
   garage_keypad:
@@ -132,7 +164,7 @@ packages:
     refresh: 60s
 ```
 
-The remote firmware defaults `keypad_debug_logging` to `false`.
+Do not override `firmware_version` in the local wrapper; the repository package owns release versioning.
 
 ### ESPHome secrets
 
@@ -153,21 +185,6 @@ openssl rand -base64 32
 ```
 
 Keep any trailing `=` padding.
-
-## Firmware versioning and updates
-
-`esphome/garage-keypad.yaml` contains an integer `firmware_version` substitution. Every repository check-in that modifies that file increments the version by one.
-
-The current checked-in firmware is **v14**.
-
-The device logs its firmware version and `ready` after initialization and again after an API client connects so remote log viewers can reliably see the version.
-
-The normal update flow is:
-
-1. Commit firmware changes to `main`.
-2. Device Builder refreshes the remote package.
-3. Compile and install, normally OTA.
-4. Verify the **Firmware Version** diagnostic entity/log output.
 
 ## BLK3 HMAC key
 
@@ -190,7 +207,7 @@ HMAC key already provisioned; BLK3 is write-protected and readable
 
 The key is intentionally readable by firmware. See the HMAC design document for the threat-model implications.
 
-## Keypad processing
+## PIN processing
 
 The key collector accepts 4-8 numeric digits. `#` submits, `*` clears, and incomplete entry times out after ten seconds.
 
@@ -200,93 +217,97 @@ On submission, firmware computes:
 HMAC-SHA256(BLK3 key, exact PIN string)
 ```
 
-and sends only the 64-character lowercase hexadecimal verifier to the Home Assistant script.
-
-### Firmware-to-Home-Assistant interface contract
-
-This exact interface is part of the v14 contract and should remain synchronized between firmware and Home Assistant:
+and sends only the 64-character lowercase hexadecimal verifier to:
 
 ```text
-script: script.garage_keypad_validate_hmac
-field:  hmac
-value:  64-character lowercase HMAC-SHA256 verifier
-```
-
-Equivalent ESPHome action call:
-
-```yaml
-action: script.garage_keypad_validate_hmac
-data:
-  hmac: <64-character verifier>
+script.garage_keypad_validate_hmac
+field: hmac
 ```
 
 If HMAC generation fails, the firmware fails closed and supplies an invalid/empty verifier that cannot authorize.
 
-The ESP32 does not contain the user authorization database and does not make the user-mapping decision locally.
+## RFID processing
 
-### Home Assistant action permission
+ESPHome's Wiegand component decodes parity-valid tag frames and supplies the decoded credential to `on_tag`. v17 keeps the commissioning log:
 
-Enable **Allow the device to perform Home Assistant actions** for the Garage Keypad ESPHome integration entry.
+```text
+RFID tag received: <decoded credential>
+```
 
-## Home Assistant authorization map
+`on_raw` also retains diagnostics for Wiegand frames larger than eight bits:
 
-The live verifier map is a dedicated local file:
+```text
+Wiegand RFID/raw frame: <bits> bits, value=0x<raw>
+```
+
+The raw logger explicitly ignores 4-bit and 8-bit frames so keypad keystrokes are not exposed.
+
+After logging the decoded tag, firmware computes:
+
+```text
+HMAC-SHA256(BLK3 key, exact decoded RFID credential string)
+```
+
+and sends only the verifier to:
+
+```text
+script.garage_keypad_validate_rfid_hmac
+field: hmac
+```
+
+The tested red RFID tag decodes as `5400449`; the live authorization database should contain its **HMAC verifier**, not `5400449`, under the nested `rfid:` map with friendly name `Red Tag`.
+
+## Home Assistant authorization database
+
+The live authorization database is one local file:
 
 ```text
 /config/garage_keypad_users.yaml
 ```
 
-Use [`homeassistant/garage-keypad-users.example.yaml`](homeassistant/garage-keypad-users.example.yaml) as the template:
+Existing PIN HMAC entries remain at the top level. RFID HMAC entries live under `rfid:`:
 
 ```yaml
-"<64-character HMAC>": "Example User"
-"<64-character HMAC>": "Example Guest"
+"<64-character PIN HMAC>": "Example PIN User"
+
+rfid:
+  "<64-character RFID HMAC>": "Red Tag"
 ```
 
-The mapping is **HMAC verifier -> friendly user name**. Plaintext PINs do not belong in this file.
+This shape intentionally avoids migrating the existing PIN map.
 
-The map was intentionally moved out of `secrets.yaml`. It is still sensitive authorization data and should not be committed, but a disclosure of this file alone does not include the ESP32-held HMAC key needed for ordinary offline PIN enumeration.
+Do not store plaintext PINs or raw RFID credentials in this file, and do not commit the live file.
 
-The checked-in Home Assistant script uses `file.read_file` with YAML decoding to load this map for each validation attempt.
+## Home Assistant scripts
 
-## Current notification-only validation path
+[`homeassistant/garage-keypad-script.yaml`](homeassistant/garage-keypad-script.yaml) contains:
 
-[`homeassistant/garage-keypad-script.yaml`](homeassistant/garage-keypad-script.yaml) defines the canonical firmware-facing script:
+- `script.garage_keypad_validate_hmac` — existing PIN verifier lookup and notification path.
+- `script.garage_keypad_validate_rfid_hmac` — RFID verifier lookup under `rfid:`. A valid RFID HMAC logs the friendly user, sends a notification, and triggers the established garage-opening automation.
+- `script.garage_keypad_generate_pin_hmac` — administrative PIN HMAC helper.
 
-```text
-script.garage_keypad_validate_hmac
-```
-
-It accepts:
+The opening automation is configured locally through `secrets.yaml`:
 
 ```yaml
-hmac: <64-character verifier>
+garage_keypad_open_automation: "automation.your_existing_garage_open_automation"
 ```
 
-For a matching verifier, it sends:
+The RFID validation script invokes it with `automation.trigger` and `skip_condition: false`, preserving the automation's conditions.
 
-```text
-Valid Code for User "<friendly name>"
-```
-
-For a non-matching verifier, it sends an invalid-code notification.
-
-**It contains no `cover.open_cover` action and cannot open the garage door.** That is intentional during v14 end-to-end testing.
-
-The notification action name is kept in local Home Assistant `secrets.yaml`:
+The notification action name is also local configuration:
 
 ```yaml
 garage_keypad_notify_service: "notify.mobile_app_your_phone"
 ```
 
-The validation script disables stored traces:
+Verifier-bearing scripts set:
 
 ```yaml
 trace:
   stored_traces: 0
 ```
 
-## Generating a verifier for a PIN
+## Generating a verifier
 
 The firmware exposes the administrative ESPHome action:
 
@@ -294,42 +315,13 @@ The firmware exposes the administrative ESPHome action:
 esphome.garage_keypad_generate_pin_hmac
 ```
 
-Example direct Home Assistant action call:
-
-```yaml
-action: esphome.garage_keypad_generate_pin_hmac
-data:
-  pin: "0123"
-```
-
-The PIN must be supplied as a string so leading zeroes are preserved.
-
-The device returns a 64-character lowercase HMAC-SHA256 verifier and publishes the latest administratively generated verifier to the **Generated PIN HMAC** diagnostic text sensor for convenient copying.
-
-The checked-in Home Assistant scripts also provide a wrapper:
-
-```text
-script.garage_keypad_generate_pin_hmac
-```
-
-That wrapper returns the ESP32 response and has stored traces disabled because its input is a plaintext provisioning PIN.
+It accepts 4-8 numeric characters and returns the HMAC for the exact supplied string. Because the current tested RFID credential `5400449` is a seven-digit numeric string and v17 HMACs the exact decoded credential with the same BLK3 key, this existing action can also be used once to obtain the verifier needed to register the tested `Red Tag` entry.
 
 The BLK3 key itself is never returned.
 
-## v14 end-to-end test procedure
+## Home Assistant action permission
 
-Use this procedure when validating the HMAC cutover. It is deliberately safe to run without operating the garage door.
-
-1. Confirm the device reports **Firmware Version 14** and the BLK3 status is provisioned/write-protected/readable.
-2. Confirm Home Assistant has `script.garage_keypad_validate_hmac` loaded and the notification-only checked-in behavior is installed.
-3. Confirm `/config/garage_keypad_users.yaml` contains the authorized verifier-to-user entries and no plaintext PINs.
-4. Enter each authorized keypad code normally and submit with `#`.
-5. Confirm a notification identifying the friendly user arrives for each authorized code.
-6. Enter one unrecognized/fake code and confirm the invalid-code notification arrives.
-7. Confirm no garage-cover action occurs during the entire test.
-8. If troubleshooting, temporarily enable `keypad_debug_logging: "true"` and compare the logged verifier with the local map; disable it when finished.
-
-Do not record actual PINs or live HMAC verifiers in issues, commits, screenshots, or test documentation.
+Enable **Allow the device to perform Home Assistant actions** for the Garage Keypad ESPHome integration entry. Without this permission, the ESP32 cannot invoke the PIN or RFID validation scripts.
 
 ## Debug logging
 
@@ -339,29 +331,9 @@ The local wrapper can temporarily set:
 keypad_debug_logging: "true"
 ```
 
-Normal keypad entry still does **not** log plaintext PINs. Debug mode logs only the resulting HMAC verifier:
+Normal keypad entry still does **not** log plaintext PINs. Debug mode logs only the resulting PIN HMAC verifier.
 
-```text
-DEBUG MODE - PIN HMAC: [<64 hex characters>]
-```
-
-HMAC verifiers are authorization material, so disable debug logging when it is not needed.
-
-## Security boundary
-
-This design is primarily intended to mitigate configuration and backup disclosure.
-
-It protects against a leaked Home Assistant verifier map immediately revealing PINs or supporting ordinary offline PIN enumeration without the separate ESP32-held key.
-
-It does **not** claim to protect against:
-
-- full compromise of the ESP32 firmware;
-- full compromise of Home Assistant;
-- physical observation of PIN entry;
-- interception of Wiegand digits before the ESP32;
-- a malicious firmware image that can read BLK3 and keypad input.
-
-See [`docs/HMAC_PIN_DESIGN.md`](docs/HMAC_PIN_DESIGN.md) for details.
+RFID commissioning currently logs decoded RFID credentials and raw Wiegand frames over eight bits. Remove those RFID diagnostic logs after commissioning if they are no longer useful.
 
 ## Safe Mode recovery
 
