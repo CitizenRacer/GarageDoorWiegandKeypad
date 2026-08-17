@@ -6,7 +6,7 @@
 # packages cannot perform !secret lookups, so the local Device Builder wrapper
 # supplies the credential substitutions from its local secrets.yaml file.
 substitutions:
-  firmware_version: "13"
+  firmware_version: "14"
 
   # Default ESP32 GPIOs for the low-voltage side of the Wiegand level shifter.
   # Physical wiring:
@@ -17,10 +17,9 @@ substitutions:
   garage_keypad_d0_pin: "GPIO22"
   garage_keypad_d1_pin: "GPIO19"
 
-  # SECURITY: Leave false in production. Set to true only while actively
-  # testing the keypad; when enabled, completed PINs are written to ESPHome's
-  # logs in plaintext and published to the Debug Last Keypad Value entity in
-  # Home Assistant.
+  # SECURITY: Leave false in production. When true, completed PIN HMAC
+  # verifiers (never plaintext PINs) are written to the ESPHome log for bench
+  # testing. The plaintext PIN is never intentionally logged or published.
   keypad_debug_logging: "false"
 
 esphome:
@@ -68,11 +67,9 @@ api:
   encryption:
     key: "${garage_keypad_api_encryption_key}"
 
-  # Generate a verifier for a PIN without exposing the device HMAC key.
-  # The input is deliberately a string so PINs with leading zeroes are
-  # represented exactly the same way as keypad input. The action returns the
-  # HMAC-SHA256 as 64 lowercase hexadecimal characters and also publishes it
-  # to the Generated PIN HMAC diagnostic text sensor for easy copying.
+  # Administrative PIN-to-HMAC generator. This exists so authorized PINs can
+  # be added to the Home Assistant verifier map without exporting the BLK3 key.
+  # The input is a string so leading zeroes are preserved exactly.
   actions:
     - action: generate_pin_hmac
       variables:
@@ -460,10 +457,9 @@ wiegand:
 # Collect 4-8 numeric digits. '#' submits the PIN, '*' clears the current
 # entry, and an incomplete entry is discarded after ten seconds.
 #
-# In production the completed PIN is not exposed as an ESPHome entity. It is
-# passed directly to Home Assistant as transient action data for validation.
-# When keypad_debug_logging is explicitly enabled, the plaintext value is also
-# published to a diagnostic text sensor for bench testing.
+# The plaintext PIN exists only transiently in the ESP32 key collector. On
+# submission, the ESP32 computes HMAC-SHA256(BLK3 key, PIN), wipes temporary
+# key/digest buffers, and sends only the 64-character verifier to Home Assistant.
 key_collector:
   - id: garage_keypad_pin
     source_id: garage_keypad_wiegand
@@ -476,24 +472,103 @@ key_collector:
     timeout: 10s
 
     on_result:
-      # DEBUG ONLY: when explicitly enabled, log the completed plaintext PIN.
       - lambda: |-
-          if (strcmp("${keypad_debug_logging}", "true") == 0) {
-            ESP_LOGW("keypad", "DEBUG MODE - PIN entered: [%s]", x.c_str());
-          } else {
-            ESP_LOGI("keypad", "PIN entered (%u digits)",
-                     static_cast<unsigned>(x.size()));
-          }
+          ESP_LOGI("keypad", "PIN entered (%u digits); generating HMAC verifier",
+                   static_cast<unsigned>(x.size()));
 
-      # Send the completed PIN directly to Home Assistant over the encrypted
-      # native API. Home Assistant owns authorization and garage-door actions.
-      # The Home Assistant ESPHome integration must allow this device to
-      # perform Home Assistant actions.
+      # Compute HMAC locally and send only the verifier to Home Assistant.
+      # Any HMAC/key failure returns an empty verifier, which the HA script
+      # rejects because valid verifiers are exactly 64 hexadecimal characters.
       - homeassistant.action:
-          action: script.garage_keypad_validate_pin
+          action: script.garage_keypad_validate_hmac
           data:
-            pin: !lambda |-
-              return x.c_str();
+            hmac: !lambda |-
+              constexpr size_t KEY_BYTES = 32;
+              constexpr size_t KEY_BITS = KEY_BYTES * 8;
+              constexpr size_t DIGEST_BYTES = 32;
+              static constexpr char HEX[] = "0123456789abcdef";
+
+              const auto wipe = [](uint8_t *buffer, size_t length) {
+                volatile uint8_t *p = buffer;
+                while (length-- > 0) {
+                  *p++ = 0;
+                }
+              };
+
+              if (esp_efuse_get_coding_scheme(EFUSE_BLK3) !=
+                  EFUSE_CODING_SCHEME_NONE) {
+                ESP_LOGE("keypad_hmac", "Cannot validate PIN: BLK3 coding scheme is not 256-bit NONE");
+                return std::string("");
+              }
+
+              if (esp_efuse_get_key_dis_read(EFUSE_BLK3)) {
+                ESP_LOGE("keypad_hmac", "Cannot validate PIN: BLK3 is read-protected");
+                return std::string("");
+              }
+
+              if (!esp_efuse_get_key_dis_write(EFUSE_BLK3)) {
+                ESP_LOGE("keypad_hmac", "Cannot validate PIN: BLK3 key is not write-protected");
+                return std::string("");
+              }
+
+              uint8_t key[KEY_BYTES] = {};
+              esp_err_t err = esp_efuse_read_block(
+                  EFUSE_BLK3, key, 0, KEY_BITS);
+              if (err != ESP_OK) {
+                wipe(key, sizeof(key));
+                ESP_LOGE("keypad_hmac", "Cannot validate PIN: unable to read BLK3: %s",
+                         esp_err_to_name(err));
+                return std::string("");
+              }
+
+              uint8_t key_or = 0;
+              for (size_t i = 0; i < KEY_BYTES; i++) {
+                key_or |= key[i];
+              }
+              if (key_or == 0) {
+                wipe(key, sizeof(key));
+                ESP_LOGE("keypad_hmac", "Cannot validate PIN: BLK3 key is empty");
+                return std::string("");
+              }
+
+              const mbedtls_md_info_t *md_info =
+                  mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+              if (md_info == nullptr) {
+                wipe(key, sizeof(key));
+                ESP_LOGE("keypad_hmac", "Cannot validate PIN: SHA-256 is unavailable");
+                return std::string("");
+              }
+
+              uint8_t digest[DIGEST_BYTES] = {};
+              const int hmac_result = mbedtls_md_hmac(
+                  md_info,
+                  key,
+                  sizeof(key),
+                  reinterpret_cast<const unsigned char *>(x.data()),
+                  x.size(),
+                  digest);
+              wipe(key, sizeof(key));
+
+              if (hmac_result != 0) {
+                wipe(digest, sizeof(digest));
+                ESP_LOGE("keypad_hmac", "Cannot validate PIN: HMAC-SHA256 calculation failed (%d)",
+                         hmac_result);
+                return std::string("");
+              }
+
+              char hex[DIGEST_BYTES * 2 + 1] = {};
+              for (size_t i = 0; i < DIGEST_BYTES; i++) {
+                hex[i * 2] = HEX[(digest[i] >> 4) & 0x0F];
+                hex[i * 2 + 1] = HEX[digest[i] & 0x0F];
+              }
+              hex[DIGEST_BYTES * 2] = '\0';
+              wipe(digest, sizeof(digest));
+
+              if (strcmp("${keypad_debug_logging}", "true") == 0) {
+                ESP_LOGW("keypad", "DEBUG MODE - PIN HMAC: [%s]", hex);
+              }
+
+              return std::string(hex);
 
     on_timeout:
       - logger.log:
@@ -613,25 +688,9 @@ sensor:
     update_interval: 60s
 
 text_sensor:
-  # DEBUG ONLY: ESPHome's native key_collector text sensor receives completed
-  # keypad values directly from garage_keypad_pin. The filter suppresses all
-  # plaintext publication unless keypad_debug_logging is explicitly true.
-  - platform: key_collector
-    name: "Debug Last Keypad Value"
-    id: keypad_debug_last_value
-    source_id: garage_keypad_pin
-    icon: "mdi:dialpad"
-    entity_category: diagnostic
-    filters:
-      - lambda: |-
-          if (strcmp("${keypad_debug_logging}", "true") == 0) {
-            return x;
-          }
-          return {};
-
-  # Last HMAC generated by the generate_pin_hmac API action. This is the
-  # verifier value intended for the Home Assistant PIN map; it is not the
-  # secret BLK3 HMAC key and does not contain the plaintext PIN.
+  # Last HMAC generated by the administrative generate_pin_hmac API action.
+  # This is a verifier value, not the secret BLK3 HMAC key, and normal keypad
+  # submissions do not publish their verifier to this entity.
   - platform: template
     name: "Generated PIN HMAC"
     id: generated_pin_hmac
