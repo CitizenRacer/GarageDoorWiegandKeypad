@@ -6,7 +6,7 @@
 # packages cannot perform !secret lookups, so the local Device Builder wrapper
 # supplies the credential substitutions from its local secrets.yaml file.
 substitutions:
-  firmware_version: "10"
+  firmware_version: "11"
 
   # Default ESP32 GPIOs for the low-voltage side of the Wiegand level shifter.
   # Physical wiring:
@@ -28,7 +28,8 @@ esphome:
   friendly_name: Garage Keypad
 
   # Log an explicit firmware version and readiness marker after ESPHome's
-  # components have completed initialization.
+  # components have completed initialization. These are also repeated after an
+  # API client connects so remote log viewers reliably see them.
   on_boot:
     - priority: -100
       then:
@@ -80,6 +81,8 @@ api:
     # time to become active and can receive them.
     - delay: 3s
     - lambda: |-
+        ESP_LOGI("startup", "Firmware version: %s", ESPHOME_PROJECT_VERSION);
+        ESP_LOGI("startup", "ready");
         ESP_LOGI("api_client", "Connected: client_info='%s' address='%s'",
                  client_info.c_str(), client_address.c_str());
 
@@ -117,7 +120,7 @@ api:
 
             if (block_or != 0 && write_protected) {
               ESP_LOGI("hmac_status",
-                       "BLK3 status: non-empty, write-protected, readable (expected provisioned HMAC key)");
+                       "HMAC key already provisioned; BLK3 is write-protected and readable");
             } else if (block_or != 0) {
               ESP_LOGW("hmac_status",
                        "BLK3 status: non-empty but NOT write-protected");
@@ -221,7 +224,7 @@ wifi:
         if (existing_or != 0) {
           if (already_write_protected) {
             ESP_LOGI(TAG,
-                     "BLK3 already contains data and is write-protected; no provisioning performed");
+                     "HMAC key already provisioned; BLK3 is write-protected and readable");
           } else {
             ESP_LOGE(TAG,
                      "BLK3 already contains data but is not write-protected; refusing to modify it");
