@@ -6,7 +6,7 @@
 # packages cannot perform !secret lookups, so the local Device Builder wrapper
 # supplies the credential substitutions from its local secrets.yaml file.
 substitutions:
-  firmware_version: "8"
+  firmware_version: "9"
 
   # Default ESP32 GPIOs for the low-voltage side of the Wiegand level shifter.
   # Physical wiring:
@@ -26,6 +26,15 @@ substitutions:
 esphome:
   name: garage-keypad
   friendly_name: Garage Keypad
+
+  # ESP-IDF eFuse/RNG APIs used for one-time BLK3 HMAC-key provisioning.
+  # Angle-bracket includes are emitted directly into ESPHome's generated
+  # main.cpp, so they also work when this YAML is consumed as a remote package.
+  includes:
+    - <esp_efuse.h>
+    - <esp_random.h>
+    - <esp_err.h>
+
   project:
     name: "citizenracer.garage_keypad"
     version: "${firmware_version}"
@@ -87,6 +96,155 @@ ota:
 wifi:
   ssid: "${wifi_ssid}"
   password: "${wifi_password}"
+
+  # Provision the device-unique HMAC key only after Wi-Fi has connected. On
+  # classic ESP32, the active Wi-Fi RF subsystem supplies true entropy to the
+  # hardware RNG used by esp_fill_random().
+  #
+  # Safety rules:
+  #   * make at most one provisioning attempt per boot;
+  #   * require the normal 256-bit/uncoded eFuse coding scheme;
+  #   * refuse to proceed if BLK3 is read- or write-protected;
+  #   * refuse to touch BLK3 if any bit is already programmed;
+  #   * never log the generated key;
+  #   * verify the burn before permanently write-protecting BLK3;
+  #   * deliberately leave BLK3 readable so firmware can use the HMAC key.
+  on_connect:
+    - lambda: |-
+        static bool provisioning_attempted = false;
+        constexpr const char *TAG = "hmac_provision";
+        constexpr size_t KEY_BYTES = 32;
+        constexpr size_t KEY_BITS = KEY_BYTES * 8;
+
+        if (provisioning_attempted) {
+          return;
+        }
+        provisioning_attempted = true;
+
+        const auto wipe = [](uint8_t *buffer, size_t length) {
+          volatile uint8_t *p = buffer;
+          while (length-- > 0) {
+            *p++ = 0;
+          }
+        };
+
+        const esp_efuse_coding_scheme_t scheme =
+            esp_efuse_get_coding_scheme(EFUSE_BLK3);
+        if (scheme != EFUSE_CODING_SCHEME_NONE) {
+          ESP_LOGE(TAG,
+                   "Refusing HMAC-key provisioning: BLK3 coding scheme is %d, not 256-bit NONE",
+                   static_cast<int>(scheme));
+          return;
+        }
+
+        if (esp_efuse_get_key_dis_read(EFUSE_BLK3)) {
+          ESP_LOGE(TAG,
+                   "Refusing HMAC-key provisioning: BLK3 is read-protected");
+          return;
+        }
+
+        const bool already_write_protected =
+            esp_efuse_get_key_dis_write(EFUSE_BLK3);
+
+        uint8_t existing[KEY_BYTES] = {};
+        esp_err_t err =
+            esp_efuse_read_block(EFUSE_BLK3, existing, 0, KEY_BITS);
+        if (err != ESP_OK) {
+          ESP_LOGE(TAG, "Unable to read BLK3: %s", esp_err_to_name(err));
+          wipe(existing, sizeof(existing));
+          return;
+        }
+
+        uint8_t existing_or = 0;
+        for (size_t i = 0; i < KEY_BYTES; i++) {
+          existing_or |= existing[i];
+        }
+        wipe(existing, sizeof(existing));
+
+        if (existing_or != 0) {
+          if (already_write_protected) {
+            ESP_LOGI(TAG,
+                     "BLK3 already contains data and is write-protected; no provisioning performed");
+          } else {
+            ESP_LOGE(TAG,
+                     "BLK3 already contains data but is not write-protected; refusing to modify it");
+          }
+          return;
+        }
+
+        if (already_write_protected) {
+          ESP_LOGE(TAG,
+                   "BLK3 is empty but already write-protected; HMAC key cannot be provisioned");
+          return;
+        }
+
+        uint8_t key[KEY_BYTES] = {};
+        esp_fill_random(key, sizeof(key));
+
+        uint8_t random_or = 0;
+        for (size_t i = 0; i < KEY_BYTES; i++) {
+          random_or |= key[i];
+        }
+        if (random_or == 0) {
+          ESP_LOGE(TAG,
+                   "Hardware RNG unexpectedly returned an all-zero key; refusing to burn BLK3");
+          wipe(key, sizeof(key));
+          return;
+        }
+
+        ESP_LOGI(TAG,
+                 "BLK3 is empty; generated a 256-bit HMAC key from the hardware RNG");
+
+        err = esp_efuse_write_block(EFUSE_BLK3, key, 0, KEY_BITS);
+        if (err != ESP_OK) {
+          ESP_LOGE(TAG, "Failed to burn HMAC key into BLK3: %s",
+                   esp_err_to_name(err));
+          wipe(key, sizeof(key));
+          return;
+        }
+
+        uint8_t verify[KEY_BYTES] = {};
+        err = esp_efuse_read_block(EFUSE_BLK3, verify, 0, KEY_BITS);
+        if (err != ESP_OK) {
+          ESP_LOGE(TAG,
+                   "HMAC key was burned, but BLK3 could not be read back for verification: %s",
+                   esp_err_to_name(err));
+          wipe(key, sizeof(key));
+          wipe(verify, sizeof(verify));
+          return;
+        }
+
+        uint8_t difference = 0;
+        for (size_t i = 0; i < KEY_BYTES; i++) {
+          difference |= key[i] ^ verify[i];
+        }
+        wipe(key, sizeof(key));
+        wipe(verify, sizeof(verify));
+
+        if (difference != 0) {
+          ESP_LOGE(TAG,
+                   "BLK3 verification FAILED; refusing to write-protect the block");
+          return;
+        }
+
+        ESP_LOGI(TAG, "BLK3 HMAC key burn verified successfully");
+
+        err = esp_efuse_set_write_protect(EFUSE_BLK3);
+        if (err != ESP_OK) {
+          ESP_LOGE(TAG,
+                   "HMAC key is present, but permanent BLK3 write protection failed: %s",
+                   esp_err_to_name(err));
+          return;
+        }
+
+        if (!esp_efuse_get_key_dis_write(EFUSE_BLK3)) {
+          ESP_LOGE(TAG,
+                   "HMAC key is present, but BLK3 write protection did not verify");
+          return;
+        }
+
+        ESP_LOGI(TAG,
+                 "BLK3 HMAC key provisioned, verified, and permanently write-protected");
 
   ap:
     ssid: "Garage-Keypad-Fallback"
