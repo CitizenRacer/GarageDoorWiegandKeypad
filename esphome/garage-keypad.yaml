@@ -6,7 +6,7 @@
 # packages cannot perform !secret lookups, so the local Device Builder wrapper
 # supplies the credential substitutions from its local secrets.yaml file.
 substitutions:
-  firmware_version: "11"
+  firmware_version: "12"
 
   # Default ESP32 GPIOs for the low-voltage side of the Wiegand level shifter.
   # Physical wiring:
@@ -37,13 +37,15 @@ esphome:
             ESP_LOGI("startup", "Firmware version: %s", ESPHOME_PROJECT_VERSION);
             ESP_LOGI("startup", "ready");
 
-  # ESP-IDF eFuse/RNG APIs used for one-time BLK3 HMAC-key provisioning.
+  # ESP-IDF eFuse/RNG APIs used for one-time BLK3 HMAC-key provisioning, plus
+  # Mbed TLS for software HMAC-SHA256 using the readable BLK3 key.
   # Angle-bracket includes are emitted directly into ESPHome's generated
   # main.cpp, so they also work when this YAML is consumed as a remote package.
   includes:
     - <esp_efuse.h>
     - <esp_random.h>
     - <esp_err.h>
+    - <mbedtls/md.h>
 
   project:
     name: "citizenracer.garage_keypad"
@@ -65,6 +67,126 @@ logger:
 api:
   encryption:
     key: "${garage_keypad_api_encryption_key}"
+
+  # Generate a verifier for a PIN without exposing the device HMAC key.
+  # The input is deliberately a string so PINs with leading zeroes are
+  # represented exactly the same way as keypad input. The action returns the
+  # HMAC-SHA256 as 64 lowercase hexadecimal characters and also publishes it
+  # to the Generated PIN HMAC diagnostic text sensor for easy copying.
+  actions:
+    - action: generate_pin_hmac
+      variables:
+        pin: string
+      supports_response: only
+      then:
+        - api.respond:
+            data: !lambda |-
+              constexpr size_t KEY_BYTES = 32;
+              constexpr size_t KEY_BITS = KEY_BYTES * 8;
+              constexpr size_t DIGEST_BYTES = 32;
+              static constexpr char HEX[] = "0123456789abcdef";
+
+              root["algorithm"] = "HMAC-SHA256";
+
+              if (pin.size() < 4 || pin.size() > 8) {
+                root["success"] = false;
+                root["error"] = "PIN must contain 4-8 digits";
+                return;
+              }
+
+              for (const char c : pin) {
+                if (c < '0' || c > '9') {
+                  root["success"] = false;
+                  root["error"] = "PIN must contain digits only";
+                  return;
+                }
+              }
+
+              if (esp_efuse_get_coding_scheme(EFUSE_BLK3) !=
+                  EFUSE_CODING_SCHEME_NONE) {
+                root["success"] = false;
+                root["error"] = "BLK3 is not configured as a 256-bit uncoded block";
+                return;
+              }
+
+              if (esp_efuse_get_key_dis_read(EFUSE_BLK3)) {
+                root["success"] = false;
+                root["error"] = "BLK3 is read-protected";
+                return;
+              }
+
+              if (!esp_efuse_get_key_dis_write(EFUSE_BLK3)) {
+                root["success"] = false;
+                root["error"] = "BLK3 HMAC key is not write-protected";
+                return;
+              }
+
+              uint8_t key[KEY_BYTES] = {};
+              const auto wipe = [](uint8_t *buffer, size_t length) {
+                volatile uint8_t *p = buffer;
+                while (length-- > 0) {
+                  *p++ = 0;
+                }
+              };
+
+              esp_err_t err = esp_efuse_read_block(
+                  EFUSE_BLK3, key, 0, KEY_BITS);
+              if (err != ESP_OK) {
+                wipe(key, sizeof(key));
+                root["success"] = false;
+                root["error"] = "Unable to read BLK3 HMAC key";
+                return;
+              }
+
+              uint8_t key_or = 0;
+              for (size_t i = 0; i < KEY_BYTES; i++) {
+                key_or |= key[i];
+              }
+              if (key_or == 0) {
+                wipe(key, sizeof(key));
+                root["success"] = false;
+                root["error"] = "BLK3 HMAC key is empty";
+                return;
+              }
+
+              const mbedtls_md_info_t *md_info =
+                  mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+              if (md_info == nullptr) {
+                wipe(key, sizeof(key));
+                root["success"] = false;
+                root["error"] = "SHA-256 is unavailable";
+                return;
+              }
+
+              uint8_t digest[DIGEST_BYTES] = {};
+              const int hmac_result = mbedtls_md_hmac(
+                  md_info,
+                  key,
+                  sizeof(key),
+                  reinterpret_cast<const unsigned char *>(pin.data()),
+                  pin.size(),
+                  digest);
+              wipe(key, sizeof(key));
+
+              if (hmac_result != 0) {
+                wipe(digest, sizeof(digest));
+                root["success"] = false;
+                root["error"] = "HMAC-SHA256 calculation failed";
+                return;
+              }
+
+              char hex[DIGEST_BYTES * 2 + 1] = {};
+              for (size_t i = 0; i < DIGEST_BYTES; i++) {
+                hex[i * 2] = HEX[(digest[i] >> 4) & 0x0F];
+                hex[i * 2 + 1] = HEX[digest[i] & 0x0F];
+              }
+              hex[DIGEST_BYTES * 2] = '\0';
+              wipe(digest, sizeof(digest));
+
+              id(generated_pin_hmac).publish_state(hex);
+              root["success"] = true;
+              root["hmac"] = hex;
+
   on_client_connected:
     # Update the LED state immediately.
     - if:
@@ -506,6 +628,16 @@ text_sensor:
             return x;
           }
           return {};
+
+  # Last HMAC generated by the generate_pin_hmac API action. This is the
+  # verifier value intended for the Home Assistant PIN map; it is not the
+  # secret BLK3 HMAC key and does not contain the plaintext PIN.
+  - platform: template
+    name: "Generated PIN HMAC"
+    id: generated_pin_hmac
+    icon: "mdi:key-chain-variant"
+    entity_category: diagnostic
+    update_interval: never
 
   # Expose this file's explicit firmware version to Home Assistant. ESPHome's
   # project version is also included in the native API device_info response.
