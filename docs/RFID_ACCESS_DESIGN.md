@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Firmware v17 extends the Garage Door Keypad from PIN-only authorization to Wiegand RFID authorization without sending raw RFID credentials to Home Assistant during normal validation.
+Firmware v17 extended the Garage Door Keypad from PIN-only authorization to Wiegand RFID authorization without sending raw RFID credentials to Home Assistant during normal validation. Firmware v18 adds the Home Assistant-visible Debug Mode safety state used by the separate garage-opening API.
 
 The RFID path reuses the same device-specific 256-bit HMAC key already provisioned in ESP32 eFuse BLK3 for PIN validation.
 
@@ -30,12 +30,14 @@ script.garage_keypad_validate_rfid_hmac
    v
 /config/garage_keypad_users.yaml
    |
-   +--> authorized: trigger established garage-opening automation
+   +--> authorized: notify/log only
    |
    +--> unauthorized: notify/log only
 ```
 
 The ESP32 does not contain the RFID authorization database and does not decide which tag is authorized. It only transforms the decoded Wiegand credential into a verifier and asks Home Assistant to validate it.
+
+Garage-door control is intentionally disconnected from the RFID validator until explicitly enabled.
 
 ## Authorization-file format
 
@@ -68,7 +70,7 @@ For the tested red tag:
 Decoded RFID credential: 5400449
 ```
 
-v17 therefore computes:
+The firmware therefore computes:
 
 ```text
 HMAC-SHA256(BLK3 key, "5400449")
@@ -110,23 +112,25 @@ A valid RFID verifier is handled by:
 script.garage_keypad_validate_rfid_hmac
 ```
 
-The script:
+The validator loads `/config/garage_keypad_users.yaml`, reads only the nested `rfid:` mapping, resolves the submitted HMAC to a friendly user, and logs/notifies the result. It does **not** currently operate the garage door.
 
-1. Loads `/config/garage_keypad_users.yaml`.
-2. Reads only the nested `rfid:` mapping.
-3. Resolves the submitted HMAC to a friendly user.
-4. Logs and notifies the successful RFID authorization.
-5. Triggers the existing Home Assistant garage-opening automation configured through `garage_keypad_open_automation`.
+The separate opening API is:
 
-The opening automation is intentionally reused rather than duplicating garage-door control logic in the keypad script.
-
-The `automation.trigger` call uses:
-
-```yaml
-skip_condition: false
+```text
+script.garage_keypad_open_garage
 ```
 
-so the existing automation's conditions are still evaluated.
+It is intentionally disabled by default and requires all of these native Home Assistant state conditions before `cover.open_cover` can run:
+
+```text
+input_boolean.garage_keypad_opening_enabled == on
+binary_sensor.garage_garage_keypad_debug_mode == off
+alarm_control_panel.5744_surety_5744 == disarmed
+```
+
+The checks are fail-closed. A missing, `unknown`, or `unavailable` state fails the condition. Debug mode is an absolute lockout: the garage-opening API must never open the door while Debug Mode is on.
+
+The RFID validator is intentionally not wired to call the opening API until garage opening is explicitly enabled.
 
 ## Threat model
 
@@ -150,4 +154,10 @@ RFID authorization fails closed if:
 - Home Assistant receives an empty/invalid verifier;
 - the verifier is not present in the nested `rfid:` map.
 
-An unrecognized or failed RFID credential does not trigger the garage-opening automation.
+The garage-opening API independently fails closed if:
+
+- opening has not been explicitly enabled;
+- the Debug Mode entity is missing, unknown, unavailable, or on;
+- the house alarm is missing, unknown, unavailable, armed, triggered, or otherwise not exactly `disarmed`.
+
+An unrecognized or failed RFID credential never reaches garage-door control.
