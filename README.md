@@ -8,9 +8,11 @@ The controller is an **ESP32S 30-pin USB-C NodeMCU development board with ESP32-
 
 ## Current release
 
-The current repository firmware is **v17**.
+The current repository firmware is **v18**.
 
-v17 adds HMAC-protected RFID authorization while preserving the existing PIN path. Wiegand RFID credentials are decoded by ESPHome, logged during commissioning, transformed on the ESP32 with HMAC-SHA256 using the existing BLK3 device key, and sent to Home Assistant only as a 64-character verifier.
+v18 exposes the compile-time keypad debug state as the **Debug Mode** diagnostic binary sensor for Home Assistant. The garage-opening API is designed to fail closed: it can run only when opening has been explicitly enabled, the ESP32 positively reports Debug Mode off, and the house alarm positively reports disarmed. PIN and RFID validators remain disconnected from garage-door control until opening is explicitly enabled.
+
+v17 added HMAC-protected RFID authorization while preserving the existing PIN path. Wiegand RFID credentials are decoded by ESPHome, logged during commissioning, transformed on the ESP32 with HMAC-SHA256 using the existing BLK3 device key, and sent to Home Assistant only as a 64-character verifier.
 
 The firmware version is exposed through the ESPHome project version and the **Firmware Version** diagnostic entity. `esphome/garage-keypad.yaml` increments `firmware_version` for every repository check-in of that file.
 
@@ -58,13 +60,27 @@ script.garage_keypad_validate_rfid_hmac
    | nested rfid: lookup in /config/garage_keypad_users.yaml
    v
 friendly user / invalid credential
-   |
-   +--> authorized: trigger established garage-opening automation
 ```
 
 The RFID verifier prevents the Home Assistant authorization file from containing raw RFID identifiers. It does **not** make a clonable static RFID credential cryptographically unclonable; the reader still receives the credential over Wiegand. See [`docs/RFID_ACCESS_DESIGN.md`](docs/RFID_ACCESS_DESIGN.md).
 
 The device-specific 256-bit HMAC key is stored in ESP32 eFuse **BLK3**, permanently write-protected, and intentionally left readable by firmware because this classic ESP32 has no dedicated hardware HMAC peripheral. See [`docs/HMAC_PIN_DESIGN.md`](docs/HMAC_PIN_DESIGN.md).
+
+### Garage-opening API safety gates
+
+The live Home Assistant opening API is `script.garage_keypad_open_garage`. It is intentionally disabled by default and is not currently called by either credential validator.
+
+Before `cover.open_cover` can run, Home Assistant requires all three native state conditions to pass:
+
+```text
+input_boolean.garage_keypad_opening_enabled == on
+binary_sensor.garage_garage_keypad_debug_mode == off
+alarm_control_panel.5744_surety_5744 == disarmed
+```
+
+These are fail-closed checks. `unknown`, `unavailable`, a missing debug entity, debug mode on, any armed alarm state, or opening-enable off stops the script before garage-door control.
+
+**Debug mode is an absolute lockout.** The garage must never be opened through this API while the keypad is in debug mode.
 
 ## Threat-model note
 
@@ -89,6 +105,8 @@ This HMAC design primarily hardens configuration and backup disclosure. If an at
 - RFID decoded/raw diagnostics without logging 4-bit or 8-bit keypad frames
 - Administrative PIN-to-HMAC generator action and Home Assistant helper script
 - Script trace storage disabled where PIN/RFID verifier material is handled
+- ESP32 Debug Mode diagnostic exposed to Home Assistant
+- Fail-closed garage-opening API with explicit enable, debug-mode lockout, and alarm-disarmed gate
 - Wi-Fi signal, uptime, die temperature, IP, SSID, MAC, and firmware diagnostics
 
 The ESPHome HTTP `web_server` is intentionally disabled. Management and telemetry use the encrypted native API instead of exposing an additional plaintext HTTP interface.
@@ -153,6 +171,8 @@ substitutions:
   garage_keypad_api_encryption_key: !secret garage_keypad_api_encryption_key
 
   # Testing only. This logs PIN HMAC verifiers, never plaintext keypad PINs.
+  # It also sets the Home Assistant Debug Mode diagnostic to on, which is an
+  # absolute lockout for the garage-opening API.
   keypad_debug_logging: "false"
 
 packages:
@@ -228,7 +248,7 @@ If HMAC generation fails, the firmware fails closed and supplies an invalid/empt
 
 ## RFID processing
 
-ESPHome's Wiegand component decodes parity-valid tag frames and supplies the decoded credential to `on_tag`. v17 keeps the commissioning log:
+ESPHome's Wiegand component decodes parity-valid tag frames and supplies the decoded credential to `on_tag`. The commissioning log is:
 
 ```text
 RFID tag received: <decoded credential>
@@ -282,19 +302,20 @@ Do not store plaintext PINs or raw RFID credentials in this file, and do not com
 
 [`homeassistant/garage-keypad-script.yaml`](homeassistant/garage-keypad-script.yaml) contains:
 
-- `script.garage_keypad_validate_hmac` — existing PIN verifier lookup and notification path.
-- `script.garage_keypad_validate_rfid_hmac` — RFID verifier lookup under `rfid:`. A valid RFID HMAC logs the friendly user, sends a notification, and triggers the established garage-opening automation.
+- `script.garage_keypad_validate_hmac` — PIN verifier lookup and notification path; no garage control.
+- `script.garage_keypad_validate_rfid_hmac` — RFID verifier lookup under `rfid:` with logging/notification; no garage control.
+- `script.garage_keypad_open_garage` — fail-closed garage-opening API, disabled unless the explicit enable helper is on and both safety-state checks pass.
 - `script.garage_keypad_generate_pin_hmac` — administrative PIN HMAC helper.
 
-The opening automation is configured locally through `secrets.yaml`:
+The opening API requires this Home Assistant helper:
 
-```yaml
-garage_keypad_open_automation: "automation.your_existing_garage_open_automation"
+```text
+input_boolean.garage_keypad_opening_enabled
 ```
 
-The RFID validation script invokes it with `automation.trigger` and `skip_condition: false`, preserving the automation's conditions.
+It must remain **off** until garage opening is explicitly enabled. Turning it on is not sufficient by itself: Debug Mode must also be off and the house alarm must be disarmed.
 
-The notification action name is also local configuration:
+The notification action name is local configuration:
 
 ```yaml
 garage_keypad_notify_service: "notify.mobile_app_your_phone"
@@ -315,7 +336,7 @@ The firmware exposes the administrative ESPHome action:
 esphome.garage_keypad_generate_pin_hmac
 ```
 
-It accepts 4-8 numeric characters and returns the HMAC for the exact supplied string. Because the current tested RFID credential `5400449` is a seven-digit numeric string and v17 HMACs the exact decoded credential with the same BLK3 key, this existing action can also be used once to obtain the verifier needed to register the tested `Red Tag` entry.
+It accepts 4-8 numeric characters and returns the HMAC for the exact supplied string. Because the current tested RFID credential `5400449` is a seven-digit numeric string and RFID HMACs use the exact decoded credential with the same BLK3 key, this existing action can also be used once to obtain the verifier needed to register the tested `Red Tag` entry.
 
 The BLK3 key itself is never returned.
 
@@ -332,6 +353,8 @@ keypad_debug_logging: "true"
 ```
 
 Normal keypad entry still does **not** log plaintext PINs. Debug mode logs only the resulting PIN HMAC verifier.
+
+v18 also exposes the same compile-time setting to Home Assistant as the **Debug Mode** diagnostic binary sensor. `on` means debug mode is active; `off` means it is not. The garage-opening API requires this entity to positively report `off`, so a missing/unknown/unavailable entity also blocks opening.
 
 RFID commissioning currently logs decoded RFID credentials and raw Wiegand frames over eight bits. Remove those RFID diagnostic logs after commissioning if they are no longer useful.
 
@@ -358,4 +381,4 @@ The onboard GPIO2 LED indicates connectivity:
 
 ## Diagnostics
 
-The device exposes Home Assistant connection state, Wi-Fi signal, uptime, ESP32 die temperature, IP address, SSID, MAC address, firmware version, restart, Safe Mode restart, and the administrative Generated PIN HMAC entity.
+The device exposes Home Assistant connection state, Debug Mode, Wi-Fi signal, uptime, ESP32 die temperature, IP address, SSID, MAC address, firmware version, restart, Safe Mode restart, and the administrative Generated PIN HMAC entity.
