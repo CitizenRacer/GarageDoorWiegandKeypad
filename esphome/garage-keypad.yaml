@@ -6,7 +6,7 @@
 # packages cannot perform !secret lookups, so the local Device Builder wrapper
 # supplies the credential substitutions from its local secrets.yaml file.
 substitutions:
-  firmware_version: "17"
+  firmware_version: "18"
 
   # Default ESP32 GPIOs for the low-voltage side of the Wiegand level shifter.
   # Physical wiring:
@@ -767,9 +767,10 @@ interval:
                       id(blue_status_phase) =
                           (id(blue_status_phase) + 1) % 4;
 
-# Expose the same Home Assistant connection state used by the blue LED as a
-# diagnostic entity on the Garage Keypad device. The connectivity device class
-# makes Home Assistant render the states as Connected / Disconnected.
+# Expose Home Assistant connection state and the compile-time keypad debug mode
+# as diagnostic entities. Home Assistant uses Debug Mode as a fail-closed safety
+# gate: the garage-opening API may proceed only when this entity positively
+# reports off.
 binary_sensor:
   - platform: template
     name: "Home Assistant Connected"
@@ -778,6 +779,14 @@ binary_sensor:
     entity_category: diagnostic
     lambda: |-
       return id(home_assistant_api_connections) > 0;
+
+  - platform: template
+    name: "Debug Mode"
+    id: garage_keypad_debug_mode
+    icon: "mdi:bug"
+    entity_category: diagnostic
+    lambda: |-
+      return strcmp("${keypad_debug_logging}", "true") == 0;
 
 sensor:
   - platform: wifi_signal
