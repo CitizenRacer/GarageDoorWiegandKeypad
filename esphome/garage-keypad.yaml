@@ -6,7 +6,7 @@
 # packages cannot perform !secret lookups, so the local Device Builder wrapper
 # supplies the credential substitutions from its local secrets.yaml file.
 substitutions:
-  firmware_version: "18"
+  firmware_version: "19"
 
   # Default ESP32 GPIOs for the low-voltage side of the Wiegand level shifter.
   # Physical wiring:
@@ -16,6 +16,11 @@ substitutions:
   # modifying this remote package.
   garage_keypad_d0_pin: "GPIO22"
   garage_keypad_d1_pin: "GPIO19"
+
+  # Home Assistant cover controlled by the keypad. A standalone '*' or '#'
+  # may CLOSE this cover only when Home Assistant reports it exactly open.
+  # This substitution can be overridden by the local Device Builder wrapper.
+  garage_door_entity_id: "cover.ratgdov25i_15cde7_door"
 
   # SECURITY: Leave false in production. When true, completed PIN HMAC
   # verifiers (never plaintext PINs) are written to the ESPHome log for bench
@@ -454,6 +459,44 @@ wiegand:
     d0: "${garage_keypad_d0_pin}"
     d1: "${garage_keypad_d1_pin}"
 
+    # Wiegand keypad keys 10 and 11 are '*' and '#'. Track whether any numeric
+    # PIN digits precede them so the normal PIN collector semantics remain
+    # unchanged. A truly standalone '*' or '#' is a CLOSE-ONLY shortcut: it
+    # requests cover.close_cover only if Home Assistant currently reports the
+    # garage door exactly open. It never calls the guarded open/credential API,
+    # never disarms the alarm, and can never issue an open command.
+    on_key:
+      - if:
+          condition:
+            lambda: |-
+              return x <= 9;
+          then:
+            - lambda: |-
+                id(keypad_pin_entry_active) = true;
+          else:
+            - if:
+                condition:
+                  lambda: |-
+                    return x == 10 || x == 11;
+                then:
+                  - if:
+                      condition:
+                        lambda: |-
+                          return !id(keypad_pin_entry_active) &&
+                                 id(garage_door_state).has_state() &&
+                                 id(garage_door_state).state == "open";
+                      then:
+                        - logger.log:
+                            tag: keypad
+                            level: INFO
+                            format: "Standalone close key pressed while garage is open; requesting close"
+                        - homeassistant.action:
+                            action: cover.close_cover
+                            data:
+                              entity_id: "${garage_door_entity_id}"
+                  - lambda: |-
+                      id(keypad_pin_entry_active) = false;
+
     # ESPHome decodes and parity-checks 26-, 34-, and 37-bit Wiegand tags
     # before firing on_tag. Keep decoded-tag logging enabled while RFID support
     # is being commissioned, then HMAC the decoded credential before sending it
@@ -563,7 +606,8 @@ wiegand:
           }
 
 # Collect 4-8 numeric digits. '#' submits the PIN, '*' clears the current
-# entry, and an incomplete entry is discarded after ten seconds.
+# entry, and an incomplete entry is discarded after ten seconds. A standalone
+# '*' or '#' is handled separately by the Wiegand on_key close-only shortcut.
 #
 # The plaintext PIN exists only transiently in the ESP32 key collector. On
 # submission, the ESP32 computes HMAC-SHA256(BLK3 key, PIN), wipes temporary
@@ -581,6 +625,7 @@ key_collector:
 
     on_result:
       - lambda: |-
+          id(keypad_pin_entry_active) = false;
           ESP_LOGI("keypad", "PIN entered (%u digits); generating HMAC verifier",
                    static_cast<unsigned>(x.size()));
 
@@ -679,10 +724,9 @@ key_collector:
               return std::string(hex);
 
     on_timeout:
-      - logger.log:
-          tag: keypad
-          level: INFO
-          format: "PIN entry timed out"
+      - lambda: |-
+          id(keypad_pin_entry_active) = false;
+          ESP_LOGI("keypad", "PIN entry timed out");
 
 # The onboard blue LED on this 30-pin ESP32-WROOM-32 board is connected to
 # GPIO2. GPIO2 is a boot strapping pin, but the board already uses it for the
@@ -704,6 +748,14 @@ light:
     restore_mode: ALWAYS_OFF
 
 globals:
+  # Tracks whether numeric PIN digits have been entered since the most recent
+  # submit/clear/timeout. This distinguishes a standalone '*' or '#' from the
+  # same keys used as part of normal PIN entry.
+  - id: keypad_pin_entry_active
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
   # Current position within the LED blink pattern.
   - id: blue_status_phase
     type: uint8_t
@@ -805,6 +857,14 @@ sensor:
     update_interval: 60s
 
 text_sensor:
+  # Import the Home Assistant cover state so the standalone close shortcut can
+  # fail closed. Unknown/unavailable/uninitialized states do nothing; only the
+  # exact state "open" allows a close request to be sent.
+  - platform: homeassistant
+    id: garage_door_state
+    entity_id: "${garage_door_entity_id}"
+    internal: true
+
   # Last HMAC generated by the administrative generate_pin_hmac API action.
   # This is a verifier value, not the secret BLK3 HMAC key, and normal keypad
   # submissions do not publish their verifier to this entity.
