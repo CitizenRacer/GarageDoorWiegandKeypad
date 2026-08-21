@@ -2,40 +2,35 @@
 
 ## Purpose
 
-The garage keypad uses short numeric PINs. Those PINs are secrets, but they have very little entropy compared with a cryptographic key. A 4-digit PIN has only 10,000 possible values, and even an 8-digit PIN has only 100,000,000 possible values.
+Garage keypad PINs are short numeric secrets. A 4-digit PIN has only 10,000 possible values, and even an 8-digit PIN has only 100,000,000. Storing plaintext PINs in Home Assistant would therefore make an accidental configuration disclosure immediately reveal working credentials.
 
-The goal of this design is to prevent Home Assistant configuration, source repositories, configuration backups, or other stored files from directly revealing keypad PINs or from giving someone who obtains only those files everything needed to recover the PINs offline.
-
-This is deliberately **configuration-disclosure hardening**. It is not intended to make a fully compromised ESP32 or fully compromised Home Assistant host safe.
-
-## Threat being mitigated
-
-A plaintext authorization map such as:
-
-```yaml
-"1234": "Alice"
-"8675309": "Bob"
-```
-
-immediately reveals the valid PINs if the file is leaked.
-
-Ordinary SHA-256 is not a sufficient replacement:
-
-```text
-SHA256("1234")
-```
-
-The PIN space is small enough that an attacker can hash every possible 4-8 digit PIN and compare the results. A public salt changes the hash values but does not remove that offline guessing attack because the attacker still has everything required to test guesses.
-
-This design instead stores:
+The project stores and submits this instead:
 
 ```text
 HMAC-SHA256(device_secret, PIN)
 ```
 
-The HMAC key is a random 256-bit device secret held in the ESP32's eFuse BLK3. It is not stored in Home Assistant, GitHub, ESPHome YAML, or normal configuration backups.
+The HMAC key is a random 256-bit device secret held in the ESP32's eFuse BLK3. It is not stored in Home Assistant, GitHub, ESPHome YAML, or ordinary configuration backups.
 
-An attacker who obtains only the Home Assistant verifier map therefore does not possess the secret needed to perform the normal offline PIN-enumeration attack.
+This is deliberately **configuration-disclosure hardening**. It is not intended to make a fully compromised ESP32 or fully compromised Home Assistant host safe.
+
+## Why HMAC instead of SHA-256
+
+A value such as:
+
+```text
+SHA256("1234")
+```
+
+can be attacked by hashing the entire small PIN space. A public salt changes the values but does not prevent the attacker from testing every guess.
+
+With:
+
+```text
+HMAC-SHA256(device_secret, "1234")
+```
+
+a party that obtains only the Home Assistant verifier map does not have the separate 256-bit ESP32 key required to test PIN guesses using the normal construction.
 
 ## Runtime architecture
 
@@ -59,22 +54,20 @@ encrypted ESPHome native API
       v
 script.garage_keypad_validate_hmac
       |
-      | hmac: <verifier>
+      | top-level verifier lookup
       v
 /config/garage_keypad_users.yaml
       |
-      | verifier -> friendly user
-      v
-valid-user or invalid-code notification
+      +--> valid: notify/activity -> guarded keypad door action
+      |
+      +--> invalid: notify/activity only
 ```
-
-The current Home Assistant path is intentionally **notification-only** for safe v14 end-to-end testing. It contains no garage-cover control action.
 
 Home Assistant does not need the plaintext PIN or the HMAC key during normal validation.
 
 ## Firmware/Home Assistant interface contract
 
-The v14 firmware-facing script contract is:
+The firmware-facing script contract is:
 
 ```text
 script ID: script.garage_keypad_validate_hmac
@@ -90,8 +83,6 @@ data:
   hmac: <64-character verifier>
 ```
 
-Keeping this exact script ID and field name synchronized is important. A Home Assistant script using a different name or input field will not receive the firmware submission even if the underlying verifier map is correct.
-
 The HMAC is deterministic: the same PIN evaluated by this ESP32 produces the same verifier every time. A different ESP32 with a different BLK3 key produces a different verifier for the same PIN.
 
 ## HMAC key provisioning
@@ -100,13 +91,13 @@ The classic ESP32 uses eFuse block `BLK3` for the device HMAC key.
 
 Provisioning is one-time and defensive:
 
-1. Firmware waits until Wi-Fi is connected so the hardware RNG has the RF entropy source active.
+1. Firmware waits until Wi-Fi is connected so the hardware RNG has its RF entropy source active.
 2. BLK3 must use the normal 256-bit uncoded eFuse scheme.
 3. Provisioning refuses to modify a non-empty block.
 4. Provisioning refuses an empty block that is already write-protected.
 5. Provisioning refuses a read-protected block because this classic ESP32 must read the key in software.
 6. `esp_fill_random()` generates 32 random bytes.
-7. The 256-bit value is burned into BLK3.
+7. The value is burned into BLK3.
 8. Firmware reads BLK3 back and verifies the burn byte-for-byte.
 9. Temporary RAM copies are wiped.
 10. BLK3 is permanently write-protected.
@@ -135,40 +126,36 @@ It is not:
 
 ## Live PIN processing
 
-For each completed keypad PIN, firmware v14:
+For each completed keypad PIN, firmware:
 
-1. Reads the already-provisioned BLK3 key into a temporary RAM buffer.
-2. Computes HMAC-SHA256 over the exact PIN string.
-3. Wipes the temporary key buffer.
-4. Converts the 32-byte digest to 64 lowercase hexadecimal characters.
-5. Wipes the binary digest buffer.
-6. Sends only the hexadecimal verifier to Home Assistant.
+1. reads the already-provisioned BLK3 key into a temporary RAM buffer;
+2. computes HMAC-SHA256 over the exact PIN string;
+3. wipes the temporary key buffer;
+4. converts the 32-byte digest to 64 lowercase hexadecimal characters;
+5. wipes the binary digest buffer;
+6. sends only the hexadecimal verifier to Home Assistant.
 
-If the eFuse state is invalid, the key cannot be read, SHA-256 is unavailable, or HMAC calculation fails, the firmware fails closed. It emits an error and supplies an empty verifier, which the Home Assistant validation script rejects.
+If the eFuse state is invalid, the key cannot be read, SHA-256 is unavailable, or HMAC calculation fails, firmware fails closed. The plaintext PIN is not intentionally logged, published as an ESPHome entity, or sent to Home Assistant during normal keypad use.
 
-The plaintext PIN is not intentionally logged, published as an ESPHome entity, or sent to Home Assistant during normal keypad use.
+When `keypad_debug_logging` is enabled, only the resulting HMAC verifier is logged. The verifier is still authorization material, so debug logging should be disabled when it is not needed.
 
-When `keypad_debug_logging` is enabled, only the HMAC verifier is logged:
-
-```text
-DEBUG MODE - PIN HMAC: [<64 hex characters>]
-```
-
-This verifier is still authorization material and debug logging should be disabled when it is not needed. The current Device Builder wrapper documentation no longer claims or enables plaintext PIN logging.
+Firmware v18 exposes that compile-time debug setting as the Home Assistant **Debug Mode** diagnostic binary sensor. Debug Mode being on is an absolute lockout against opening the garage through the keypad door-action API.
 
 ## Home Assistant verifier database
 
-The live verifier-to-user database is a dedicated local YAML file:
+The live verifier-to-user database is:
 
 ```text
 /config/garage_keypad_users.yaml
 ```
 
-Its shape is:
+PIN entries are top-level:
 
 ```yaml
-"<64 hex verifier>": "Friendly User Name"
+"<64-character PIN HMAC>": "Friendly User Name"
 ```
+
+RFID entries are kept under the separate `rfid:` mapping. Plaintext PINs do not belong in the file. Live verifier values also should not be committed to the public repository.
 
 The repository contains only the non-secret template:
 
@@ -176,40 +163,70 @@ The repository contains only the non-secret template:
 homeassistant/garage-keypad-users.example.yaml
 ```
 
-Plaintext PINs do not belong in the file. Live HMAC verifier values also should not be committed to the public repository.
+The checked-in validation script reads the YAML file with `file.read_file` on each validation attempt and performs an exact verifier lookup. Verifier-bearing scripts set `trace.stored_traces: 0` so submitted authorization material is not retained in stored script traces.
 
-The map was moved out of `secrets.yaml` so it can be managed as its own authorization database. The map is still security-sensitive because possession of a valid verifier may be useful in a compromised runtime, but disclosure of the map alone does not reveal the ESP32-held HMAC key.
+## Valid PIN behavior
 
-The checked-in validation script reads the YAML file with `file.read_file` on each validation attempt and performs an exact verifier lookup.
-
-## Current notification-only validation
-
-The checked-in Home Assistant validation script deliberately does not operate the garage door.
-
-For a recognized verifier it sends:
+A recognized PIN verifier now records the friendly-user activity and calls:
 
 ```text
-Valid Code for User "<friendly user>"
+script.garage_keypad_open_garage
 ```
 
-For an unrecognized verifier it sends an invalid-code notification.
+The historical script name is retained for compatibility, but it now acts as the keypad door-action API.
 
-This mode exists so all authorized keypad codes plus a fake code can be exercised through the complete v14 path without risking unintended garage movement.
+### Garage already open
 
-The notification service name is local configuration supplied through Home Assistant `secrets.yaml`:
+A valid credential closes the garage immediately and does not change the house alarm.
 
-```yaml
-garage_keypad_notify_service: "notify.mobile_app_your_phone"
+### Garage not already open
+
+Opening requires:
+
+```text
+input_boolean.garage_keypad_opening_enabled == on
+binary_sensor.garage_garage_keypad_debug_mode == off
 ```
 
-The validation script sets:
+If the alarm is already `disarmed`, opening may proceed without creating an alarm restore marker.
 
-```yaml
-trace:
-  stored_traces: 0
+If the alarm is in one of the supported armed modes:
+
+```text
+armed_home
+armed_away
+armed_night
+armed_vacation
+armed_custom_bypass
 ```
 
-so submitted HMAC authorization material is not retained in stored Home Assistant script traces.
+the script captures that exact mode, disarms the alarm, waits up to 15 seconds for confirmed `disarmed`, stores the prior mode in `input_select.garage_keypad_alarm_restore_mode`, and then opens the garage.
+
+Any alarm state that cannot be positively brought to `disarmed` blocks opening.
+
+## Conditional alarm restoration
+
+The companion automation:
+
+```text
+automation.garage_keypad_restore_alarm_after_garage_closes
+```
+
+restores the exact prior mode after the garage closes **if and only if** the keypad opening flow had disarmed the alarm and therefore left a pending restore marker.
+
+If the alarm was already disarmed before keypad access, the marker remains `none` and the automation does not arm the system.
+
+If somebody manually re-arms before the garage closes, the automation preserves that armed state and clears the pending marker after closure rather than overriding the manual choice.
+
+## Activity logging
+
+Valid and invalid PIN attempts update:
+
+```text
+input_text.garage_keypad_activity
+```
+
+with the friendly-user result (for a valid credential) or invalid-attempt result and a timestamp. The HMAC verifier itself is not written there.
 
 ## Administrative PIN HMAC generator
 
@@ -219,52 +236,17 @@ The device exposes an ESPHome API action for adding or rotating authorized PIN e
 esphome.garage_keypad_generate_pin_hmac
 ```
 
-Example:
+It accepts a 4-8 digit numeric string and returns the HMAC for the exact supplied string. The PIN is deliberately supplied as text so leading zeroes are preserved.
 
-```yaml
-action: esphome.garage_keypad_generate_pin_hmac
-data:
-  pin: "0123"
-```
+The generator requires BLK3 to be 256-bit, readable, non-empty, and write-protected; computes the HMAC; wipes temporary key and digest buffers; and returns the 64-character lowercase verifier. It does not expose the BLK3 key itself.
 
-The PIN is deliberately supplied as a string so leading zeroes are preserved.
-
-The generator:
-
-1. Requires a 4-8 digit numeric string.
-2. Requires BLK3 to be 256-bit, readable, non-empty, and write-protected.
-3. Reads the key into RAM.
-4. Computes HMAC-SHA256 over the exact PIN string.
-5. Wipes the RAM key and binary digest buffers.
-6. Returns the 64-character lowercase hexadecimal verifier.
-7. Publishes that verifier to the `Generated PIN HMAC` diagnostic text sensor for convenient administrative copying.
-
-The API does not expose an operation that returns the BLK3 key itself.
-
-The repository also contains a Home Assistant wrapper script:
+The repository also contains the Home Assistant wrapper:
 
 ```text
 script.garage_keypad_generate_pin_hmac
 ```
 
-It invokes the ESPHome action and returns the HMAC response. Because this helper's input is a plaintext PIN, the checked-in wrapper also sets `stored_traces: 0`.
-
-This generator is an administrative provisioning tool. It is not part of normal keypad validation.
-
-## v14 end-to-end test expectations
-
-The safe test path is:
-
-1. Confirm the controller reports firmware v14.
-2. Confirm BLK3 reports provisioned, write-protected, and readable.
-3. Confirm `script.garage_keypad_validate_hmac` is loaded in Home Assistant.
-4. Confirm `/config/garage_keypad_users.yaml` contains the expected verifier-to-user entries.
-5. Enter each authorized code on the physical keypad and submit with `#`.
-6. Expect a friendly-user notification for each authorized code.
-7. Enter one fake/unrecognized code and expect the invalid-code notification.
-8. Confirm no garage-cover action occurs.
-
-Debug HMAC logging may be enabled temporarily to compare a device-generated verifier with the local map. Actual PINs and live verifiers should never be placed in commits, issues, screenshots, or test notes.
+Because this helper's input is a plaintext PIN, its stored traces are disabled as well.
 
 ## What this protects against
 
@@ -274,23 +256,19 @@ This design materially improves protection against realistic accidental-disclosu
 - committing the verifier map to a public or shared repository;
 - leaking a configuration backup containing the map;
 - sharing configuration snippets while forgetting the map is included;
-- an attacker obtaining only the stored verifier map and trying to recover short PINs offline.
-
-The last case is the reason for HMAC rather than ordinary SHA-256 or SHA-256 with a public salt. Testing a PIN guess requires the separate ESP32-held key.
+- an attacker obtaining only the stored verifier map and trying to recover short PINs offline without the device key.
 
 ## What this does not protect against
 
 ### Full ESP32 compromise
 
-The classic ESP32 firmware must read BLK3 to calculate HMACs. Malicious code executing with sufficient privilege on the ESP32 can therefore potentially read the HMAC key and capture keypad input.
-
-Write protection prevents changing the eFuse key. It does not make the key unreadable.
+The classic ESP32 firmware must read BLK3 to calculate HMACs. Malicious code executing with sufficient privilege on the ESP32 can therefore potentially read the HMAC key and capture keypad input. Write protection prevents changing the key; it does not make it unreadable.
 
 ### Full Home Assistant compromise
 
-A fully compromised Home Assistant installation is outside this threat model. An attacker with sufficient access may be able to invoke `generate_pin_hmac` repeatedly and use the ESP32 as an online PIN-guessing oracle.
+A fully compromised Home Assistant installation is outside this threat model. Home Assistant already has direct access to the garage-door control surface, so compromising the keypad validation path is not required to operate the garage.
 
-The generator is not equivalent to an HSM or secure element with authorization and rate limiting.
+An attacker with sufficient Home Assistant access may also be able to invoke the administrative HMAC generator repeatedly and use the ESP32 as an online PIN-guessing oracle.
 
 ### Physical/keypad observation
 
@@ -298,38 +276,13 @@ HMAC cannot stop someone from learning a PIN by watching a user enter it, compro
 
 ### Malicious firmware
 
-A malicious firmware image can observe the plaintext keypad input and, because BLK3 is intentionally readable, can also obtain the HMAC key. This design does not attempt to provide secure-boot-based or hardware-backed malicious-firmware resistance.
-
-### Weak user-selected PINs
-
-HMAC protects the stored verifier map from ordinary offline enumeration without the device key. It does not make a weak PIN intrinsically strong. PIN length, attempt throttling, physical security, and authorization policy remain separate controls.
-
-## Why the key is not in `secrets.yaml`
-
-Putting the HMAC key in `secrets.yaml` would be better than embedding it directly in shareable YAML, but it would still place the key in the Home Assistant / ESPHome configuration-secret domain. That increases the chance that the key appears in configuration backups or is exposed alongside the verifier map.
-
-Using eFuse keeps the key device-local and removes it from ordinary configuration material.
-
-This directly addresses the project's primary threat: a configuration-file disclosure should not also disclose everything necessary to recover the PINs.
-
-## Why the key is write-protected
-
-The key must remain stable because every authorized HMAC verifier depends on it.
-
-Permanent write protection means:
-
-- firmware bugs cannot accidentally overwrite BLK3; and
-- later software cannot silently rotate the device key and invalidate every stored verifier.
-
-Read protection is intentionally not enabled because this classic ESP32 requires software access to the key.
+A malicious firmware image can observe plaintext keypad input and, because BLK3 is intentionally readable, can also obtain the HMAC key. This design does not claim secure-boot/HSM resistance to malicious firmware.
 
 ## Device replacement and recovery
 
 The BLK3 key is device-specific and there is no supported key-export workflow.
 
 If the ESP32 is replaced, the replacement controller will generate a new random BLK3 key. Existing verifiers will no longer match. Each authorized PIN must be entered into the new controller's administrative HMAC generator and the Home Assistant verifier map rebuilt.
-
-This is an intentional tradeoff: configuration backups contain verifier values but not the secret needed to reproduce them on another device.
 
 ## Migration history
 
@@ -338,9 +291,9 @@ This is an intentional tradeoff: configuration backups contain verifier values b
 - **v12:** added the administrative PIN-to-HMAC generator.
 - **v13:** fixed ESPHome `StringRef` compatibility for the generator.
 - **v14:** switched live keypad processing from plaintext PIN submission to local HMAC-SHA256 and HMAC-only Home Assistant validation.
-- **v14 Home Assistant migration:** moved the verifier-to-user map into `/config/garage_keypad_users.yaml` and uses a notification-only validation path for safe end-to-end testing before any garage-opening action is enabled.
-
-The migration converted the authorization database to HMAC verifiers before v14 was deployed so plaintext PINs were not required by the live validation path after cutover.
+- **v16/v17:** added Wiegand RFID handling and HMAC-protected RFID validation.
+- **v18:** exposed Debug Mode to Home Assistant so keypad opening can fail closed when debugging is enabled.
+- **Current Home Assistant workflow:** valid PIN/RFID credentials call a single guarded door-action script; an already-open garage closes on a valid credential; opening can temporarily disarm supported alarm modes and a separate automation restores the exact prior mode after closure only when the keypad flow owned the disarm.
 
 ## Security summary
 
@@ -360,5 +313,3 @@ Home Assistant verifier map leaked
 ```
 
 It deliberately does not claim resistance to total compromise of the ESP32 or Home Assistant runtime.
-
-For the current hardware and threat model, it keeps plaintext PINs out of long-lived authorization storage and out of the normal device-to-Home-Assistant validation path at low operational cost.
