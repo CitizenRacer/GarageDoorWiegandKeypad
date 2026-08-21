@@ -4,14 +4,22 @@
 # PIN HMAC -> user entries remain at the top level. RFID HMAC -> user entries
 # live under the nested `rfid:` key so the two credential classes are separate.
 #
-# SAFETY: Garage opening is intentionally disabled by default. Valid PIN/RFID
-# validation does not call the opening API until that integration is explicitly
-# enabled. The opening script itself is fail-closed and requires ALL of:
-#   1. input_boolean.garage_keypad_opening_enabled == on
-#   2. binary_sensor.garage_garage_keypad_debug_mode == off
-#   3. alarm_control_panel.5744_surety_5744 == disarmed
-# Missing/unknown/unavailable states fail these native state conditions and stop
-# the script before cover.open_cover can run.
+# Valid PIN and RFID credentials call script.garage_keypad_open_garage. That
+# script is really the guarded keypad door-action API:
+#   * if the garage is already open, the valid credential closes it immediately
+#     and does not change the house alarm;
+#   * otherwise, opening requires explicit enablement and Debug Mode positively
+#     off;
+#   * if the house alarm is in a supported armed mode, the script disarms it,
+#     records that exact prior mode, confirms disarm, and then opens the garage;
+#   * if the alarm was already disarmed, it opens without setting a restore
+#     marker;
+#   * unknown/unavailable/triggered/unsupported alarm states fail closed.
+#
+# The companion automation in garage-keypad-automation.yaml restores the exact
+# prior armed mode after the garage closes, but only when the keypad opening flow
+# itself disarmed the alarm. A manual re-arm clears the pending marker rather
+# than overriding the user's chosen armed state.
 #
 # Required local files/settings:
 #   /config/garage_keypad_users.yaml
@@ -23,9 +31,18 @@
 #   /config/secrets.yaml
 #     garage_keypad_notify_service: "notify.mobile_app_your_phone"
 #
-# Required Home Assistant helper (created in the UI for the live installation):
+# Required Home Assistant helpers (created in the UI for the live installation):
 #   input_boolean.garage_keypad_opening_enabled
-#   Initial/default state: off
+#     Explicit opening gate. Keep off until garage opening is intentionally
+#     enabled.
+#
+#   input_select.garage_keypad_alarm_restore_mode
+#     Options: none, armed_home, armed_away, armed_night, armed_vacation,
+#     armed_custom_bypass. Initial/default option: none.
+#
+#   input_text.garage_keypad_activity
+#     Records the latest valid/invalid keypad activity so it appears in Home
+#     Assistant entity history without retaining verifier material.
 #
 # The ESP32 computes HMAC-SHA256 locally using its device-specific BLK3 key.
 # Normal PIN and RFID validation sends only the verifier to Home Assistant.
@@ -34,9 +51,11 @@
 garage_keypad_validate_hmac:
   alias: Garage Keypad - Validate HMAC
   description: >-
-    Validate a PIN HMAC-SHA256 verifier submitted by the ESPHome garage keypad
-    against /config/garage_keypad_users.yaml and send a phone notification.
-    Garage-door control is intentionally disabled in this validator.
+    Validate a 64-character lowercase HMAC-SHA256 verifier submitted by the
+    garage ESPHome keypad against /config/garage_keypad_users.yaml. Plaintext
+    PINs are not stored or accepted. On a valid credential, notify/log and
+    invoke the guarded garage-keypad door-action API; the opening path retains
+    its explicit enable and debug-mode safety gates.
   mode: queued
   max: 10
 
@@ -79,6 +98,17 @@ garage_keypad_validate_hmac:
               data:
                 message: >-
                   Valid Code for User "{{ matched_user }}"
+
+            - alias: Record valid PIN activity
+              action: input_text.set_value
+              target:
+                entity_id: input_text.garage_keypad_activity
+              data:
+                value: >-
+                  Valid code for user "{{ matched_user }}" — {{ now().isoformat() }}
+
+            - alias: Request guarded garage door action
+              action: script.garage_keypad_open_garage
       default:
         - alias: Notify invalid credential
           action: !secret garage_keypad_notify_service
@@ -86,15 +116,23 @@ garage_keypad_validate_hmac:
             title: Garage Keypad
             message: Invalid Garage Keypad Code
 
+        - alias: Record invalid PIN activity
+          action: input_text.set_value
+          target:
+            entity_id: input_text.garage_keypad_activity
+          data:
+            value: >-
+              Invalid garage keypad code — {{ now().isoformat() }}
+
 # RFID validation uses the same authorization file but a separate nested map.
-# Garage opening remains intentionally disconnected from this validator until
-# explicitly enabled later.
 garage_keypad_validate_rfid_hmac:
   alias: Garage Keypad - Validate RFID HMAC
   description: >-
     Validate an RFID HMAC-SHA256 verifier submitted by the ESPHome garage
     keypad, resolve the friendly user from the nested rfid map, and notify/log
-    the result. Garage-door control is intentionally disabled in this validator.
+    the result. On a valid credential, invoke the guarded garage-keypad
+    door-action API; the opening path retains its explicit enable and debug-mode
+    safety gates.
   mode: queued
   max: 10
 
@@ -136,63 +174,151 @@ garage_keypad_validate_rfid_hmac:
             - alias: Log valid RFID credential
               action: logbook.log
               data:
-                name: Garage Keypad
+                name: Garage Keypad RFID
                 message: >-
-                  Valid RFID credential for user "{{ matched_user }}"
+                  Valid RFID for user "{{ matched_user }}"
+                entity_id: script.garage_keypad_validate_rfid_hmac
 
             - alias: Notify valid RFID credential
               action: !secret garage_keypad_notify_service
               data:
-                title: Garage Keypad
+                title: Garage Keypad RFID
                 message: >-
                   Valid RFID for User "{{ matched_user }}"
+
+            - alias: Record valid RFID activity
+              action: input_text.set_value
+              target:
+                entity_id: input_text.garage_keypad_activity
+              data:
+                value: >-
+                  Valid RFID for user "{{ matched_user }}" - {{ now().isoformat() }}
+
+            - alias: Request guarded garage door action
+              action: script.garage_keypad_open_garage
       default:
         - alias: Log invalid RFID credential
           action: logbook.log
           data:
-            name: Garage Keypad
-            message: Invalid RFID credential
+            name: Garage Keypad RFID
+            message: Invalid RFID attempt
+            entity_id: script.garage_keypad_validate_rfid_hmac
 
         - alias: Notify invalid RFID credential
           action: !secret garage_keypad_notify_service
           data:
-            title: Garage Keypad
-            message: Invalid Garage Keypad RFID Credential
+            title: Garage Keypad RFID
+            message: Invalid Garage Keypad RFID
 
-# Garage-opening API. This script is intentionally NOT called by either
-# validator above. It may only reach cover.open_cover when every fail-closed
-# state condition below is positively satisfied.
+        - alias: Record invalid RFID activity
+          action: input_text.set_value
+          target:
+            entity_id: input_text.garage_keypad_activity
+          data:
+            value: >-
+              Invalid garage keypad RFID - {{ now().isoformat() }}
+
+# Guarded garage keypad door-action API. This script is called only after a
+# credential validator has positively authorized the credential.
+#
+# Closing an already-open garage is intentionally allowed immediately and does
+# not alter the alarm. The opening branch remains fail-closed.
 garage_keypad_open_garage:
   alias: Garage Keypad - Open Garage
   description: >-
-    Fail-closed garage keypad opening API. Requires explicit enablement, ESP32
-    debug mode off, and the house alarm disarmed. Unknown/unavailable states
-    block opening.
+    Garage keypad door-action API. If the garage door is already open, a valid
+    keypad credential closes it immediately without changing the alarm.
+    Otherwise, opening remains fail-closed: opening must be explicitly enabled
+    and ESP32 debug mode must positively report off. If the house alarm is
+    armed, this script disarms it, records the exact prior armed mode for later
+    restoration, verifies disarm, then opens the garage. Unknown or unavailable
+    alarm states block opening. If the alarm was already disarmed before keypad
+    access, no restore marker is set.
   icon: mdi:garage-lock
   mode: single
   trace:
     stored_traces: 0
 
   sequence:
-    - alias: Require explicit garage keypad opening enable
-      condition: state
-      entity_id: input_boolean.garage_keypad_opening_enabled
-      state: "on"
+    - alias: Close if garage is already open; otherwise use guarded opening flow
+      choose:
+        - conditions:
+            - condition: state
+              entity_id: cover.ratgdov25i_15cde7_door
+              state: open
+          sequence:
+            - alias: Close garage door
+              action: cover.close_cover
+              target:
+                entity_id: cover.ratgdov25i_15cde7_door
+      default:
+        - alias: Require explicit garage keypad opening enable
+          condition: state
+          entity_id: input_boolean.garage_keypad_opening_enabled
+          state: "on"
 
-    - alias: Require ESP32 debug mode off
-      condition: state
-      entity_id: binary_sensor.garage_garage_keypad_debug_mode
-      state: "off"
+        - alias: Require ESP32 debug mode off
+          condition: state
+          entity_id: binary_sensor.garage_garage_keypad_debug_mode
+          state: "off"
 
-    - alias: Require house alarm disarmed
-      condition: state
-      entity_id: alarm_control_panel.5744_surety_5744
-      state: disarmed
+        - alias: Capture alarm state before keypad access
+          variables:
+            alarm_before: "{{ states('alarm_control_panel.5744_surety_5744') }}"
 
-    - alias: Open garage door
-      action: cover.open_cover
-      target:
-        entity_id: cover.ratgdov25i_15cde7_door
+        - alias: Disarm alarm only if keypad found it armed
+          choose:
+            - conditions:
+                - condition: state
+                  entity_id: alarm_control_panel.5744_surety_5744
+                  state:
+                    - armed_home
+                    - armed_away
+                    - armed_night
+                    - armed_vacation
+                    - armed_custom_bypass
+              sequence:
+                - alias: Disarm house alarm
+                  action: alarm_control_panel.alarm_disarm
+                  target:
+                    entity_id: alarm_control_panel.5744_surety_5744
+
+                - alias: Wait for disarm if needed
+                  if:
+                    - condition: not
+                      conditions:
+                        - condition: state
+                          entity_id: alarm_control_panel.5744_surety_5744
+                          state: disarmed
+                  then:
+                    - wait_for_trigger:
+                        - trigger: state
+                          entity_id: alarm_control_panel.5744_surety_5744
+                          to: disarmed
+                      timeout: 00:00:15
+                      continue_on_timeout: false
+
+                - alias: Require confirmed disarm
+                  condition: state
+                  entity_id: alarm_control_panel.5744_surety_5744
+                  state: disarmed
+
+                - alias: Record keypad-owned restore mode
+                  action: input_select.select_option
+                  target:
+                    entity_id: input_select.garage_keypad_alarm_restore_mode
+                  data:
+                    option: "{{ alarm_before }}"
+
+        - alias: Require confirmed disarmed alarm before opening
+          condition: state
+          entity_id: alarm_control_panel.5744_surety_5744
+          state: disarmed
+
+        - alias: Open garage door
+          action: cover.open_cover
+          target:
+            entity_id: cover.ratgdov25i_15cde7_door
 
 # Administrative helper used when adding or rotating a keypad code. The PIN is
 # sent to the ESP32's encrypted ESPHome API action; the ESP32 returns only the
