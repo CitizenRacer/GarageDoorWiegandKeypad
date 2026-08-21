@@ -8,18 +8,21 @@ The controller is an **ESP32S 30-pin USB-C NodeMCU development board with ESP32-
 
 ## Current release
 
-The current repository firmware is **v18**.
+The current repository firmware is **v19**.
 
-v18 exposes the compile-time keypad debug state as the **Debug Mode** diagnostic binary sensor for Home Assistant. Firmware versioning is owned by `esphome/garage-keypad.yaml`; its `firmware_version` substitution is incremented for every repository check-in that changes that file.
+v19 adds a **close-only standalone-key shortcut**: when no PIN digits are in progress and Home Assistant reports the garage door exactly `open`, pressing either `*` or `#` requests `cover.close_cover`. The shortcut never opens the garage, never validates or bypasses a credential, and never disarms the alarm. Unknown, unavailable, or otherwise non-`open` garage states cause no action.
 
-The latest Home Assistant access-control workflow does not require a firmware change, so firmware remains v18:
+v18 introduced the compile-time keypad debug state as the **Debug Mode** diagnostic binary sensor for Home Assistant. Firmware versioning is owned by `esphome/garage-keypad.yaml`; its `firmware_version` substitution is incremented for every repository check-in that changes that file.
+
+The current access-control behavior is:
 
 - valid PIN and RFID credentials call the guarded keypad door-action API;
 - if the garage is already open, a valid credential closes it immediately without changing the alarm;
-- opening requires the explicit opening-enable helper to be on and the ESP32 Debug Mode entity to positively report off;
-- if the house alarm is already disarmed, the garage opens normally;
-- if the alarm is in a supported armed mode, the keypad flow disarms it, remembers the exact prior armed mode, confirms disarm, and then opens the garage;
-- after the garage closes, the alarm is restored only if the keypad flow was the thing that disarmed it;
+- if the garage is already open and no PIN is being entered, standalone `*` or `#` also closes it without changing the alarm;
+- opening always requires a valid credential, the explicit opening-enable helper to be on, and the ESP32 Debug Mode entity to positively report off;
+- if the house alarm is already disarmed, an authorized opening proceeds normally;
+- if the alarm is in a supported armed mode, the authorized keypad flow disarms it, remembers the exact prior armed mode, confirms disarm, and then opens the garage;
+- after the garage closes, the alarm is restored only if the keypad opening flow was the thing that disarmed it;
 - a manual re-arm before garage closure is preserved rather than overwritten;
 - unknown, unavailable, triggered, or otherwise unsupported alarm states fail closed for opening.
 
@@ -87,7 +90,20 @@ Despite the historical script name, it is now the keypad **door-action API**.
 
 A valid credential calls `cover.close_cover` immediately. This close path does not disarm, arm, or otherwise modify the house alarm.
 
-The safety interlocks below are opening interlocks. Debug Mode is an absolute lockout against **opening** through the keypad API; it does not prevent an already-open garage from being closed by a valid credential.
+Firmware v19 additionally imports the garage cover state from Home Assistant. If **no numeric PIN digits are in progress**, Wiegand key 10 (`*`) or key 11 (`#`) may issue a direct `cover.close_cover` action, but only when the imported state is exactly `open`.
+
+This standalone-key path is intentionally narrower than the credential path:
+
+- it can issue only `cover.close_cover`;
+- it never calls `script.garage_keypad_open_garage`;
+- it never opens the garage;
+- it never disarms or otherwise changes the alarm;
+- `*` after entered digits remains the normal PIN-clear key;
+- `#` after entered digits remains the normal PIN-submit key;
+- after a PIN-entry timeout, the next standalone `*` or `#` is again eligible for close-only behavior;
+- if the imported garage state is unknown, unavailable, uninitialized, closed, opening, or closing, the shortcut does nothing.
+
+The safety interlocks below are opening interlocks. Debug Mode is an absolute lockout against **opening** through the keypad API; it does not prevent an already-open garage from being closed.
 
 ### If the garage is not already open
 
@@ -124,11 +140,13 @@ When the garage reaches `closed`:
 - marker set + alarm still `disarmed` -> restore the recorded armed mode;
 - marker set + alarm already manually re-armed -> preserve the current armed state and clear the marker.
 
-This is what makes the re-arm behavior conditional on the keypad flow having disarmed the alarm in the first place.
+This also works when a keypad-owned opening is later closed with standalone `*` or `#`: the close itself does not touch the alarm, and the existing closure automation performs the pending restore.
 
 ## Threat-model note
 
 This HMAC design primarily hardens configuration and backup disclosure. If an attacker already controls Home Assistant, protecting the keypad validation path from that same attacker adds little garage-door security because Home Assistant itself already has the ability to operate the garage door.
+
+The standalone `*`/`#` shortcut intentionally requires no credential because it can only close an already-open garage. It adds no path to opening or alarm disarm.
 
 ## Current features
 
@@ -142,6 +160,7 @@ This HMAC design primarily hardens configuration and backup disclosure. If an at
 - Home Assistant API-client tracking
 - Native Wiegand keypad and RFID input
 - 4-8 digit PIN collection with `#` submit, `*` clear, and 10-second timeout
+- Standalone `*` or `#` close-only shortcut when the garage is already open
 - Device-local HMAC-SHA256 PIN transformation
 - Device-local HMAC-SHA256 RFID transformation
 - 256-bit device key in write-protected ESP32 eFuse BLK3
@@ -166,6 +185,7 @@ GarageDoorWiegandKeypad/
 ├── README.md
 ├── cad/
 ├── docs/
+│   ├── BOM.md
 │   ├── HMAC_PIN_DESIGN.md
 │   ├── RFID_ACCESS_DESIGN.md
 │   └── images/
@@ -199,11 +219,13 @@ These pins are substitutions and can be overridden from the local Device Builder
 |---:|---|---|
 | 1 | Retekess T-AC04 Wiegand keypad / RFID reader | Outdoor keypad and Wiegand source |
 | 1 | ESP32S 30-pin ESP32-WROOM-32 board | Controller |
-| 1 | eletechsup ES350+485 30-pin expansion board | Screw-terminal carrier |
+| 1 | ESP32 DIN-rail carrier with integrated DC-DC buck converter | Screw-terminal carrier, DIN mounting, and regulated ESP32 power from 12 V |
 | 1 | MEAN WELL HDR-30-12 | 12 V DIN-rail power supply |
 | 1 | HiLetgo 4-channel BSS138 level shifter | Wiegand level shifting |
 | As needed | 4-conductor security wire | Keypad-to-controller cable |
-| As needed | 18 AWG stranded wire | Internal power wiring |
+| As needed | 18 AWG PVC stranded wire | Internal power wiring |
+
+See the complete as-built purchase list and links in [`docs/BOM.md`](docs/BOM.md).
 
 ## ESPHome Device Builder setup
 
@@ -233,7 +255,7 @@ packages:
     refresh: 60s
 ```
 
-Do not override `firmware_version` in the local wrapper; the repository package owns release versioning.
+The firmware defaults `garage_door_entity_id` to the current ratgdo garage cover. It may be overridden in the local wrapper if the Home Assistant entity ID changes. Do not override `firmware_version`; the repository package owns release versioning.
 
 ### ESPHome secrets
 
@@ -279,6 +301,8 @@ The key is intentionally readable by firmware. See the HMAC design document for 
 ## PIN processing
 
 The key collector accepts 4-8 numeric digits. `#` submits, `*` clears, and incomplete entry times out after ten seconds.
+
+Firmware separately tracks whether numeric PIN entry is active. When no digits are in progress, a standalone `*` or `#` is eligible for the v19 close-only shortcut described above. This does not change the collected PIN, HMAC, or credential-validation path.
 
 On submission, firmware computes:
 
@@ -358,6 +382,8 @@ Do not store plaintext PINs or raw RFID credentials in this file, and **do not c
 
 [`homeassistant/garage-keypad-automation.yaml`](homeassistant/garage-keypad-automation.yaml) contains the alarm-restore automation described above.
 
+The standalone v19 `*`/`#` shortcut is implemented in ESPHome and directly issues `cover.close_cover`; it does not use or alter the Home Assistant authorization scripts.
+
 Required helpers:
 
 ```text
@@ -404,7 +430,7 @@ It accepts 4-8 numeric characters and returns the HMAC for the exact supplied st
 
 ## Home Assistant action permission
 
-Enable **Allow the device to perform Home Assistant actions** for the Garage Keypad ESPHome integration entry. Without this permission, the ESP32 cannot invoke the PIN or RFID validation scripts.
+Enable **Allow the device to perform Home Assistant actions** for the Garage Keypad ESPHome integration entry. Without this permission, the ESP32 cannot invoke the PIN/RFID validation scripts or issue the standalone v19 garage-close action.
 
 ## Debug logging
 
@@ -416,7 +442,7 @@ keypad_debug_logging: "true"
 
 Normal keypad entry still does **not** log plaintext PINs. Debug mode logs only the resulting PIN HMAC verifier.
 
-v18 exposes the same compile-time setting to Home Assistant as the **Debug Mode** diagnostic binary sensor. `on` means debug mode is active; `off` means it is not. The keypad opening path requires this entity to positively report `off`, so a missing/unknown/unavailable entity also blocks opening.
+v18 introduced the **Debug Mode** diagnostic binary sensor, and it remains present in v19. `on` means debug mode is active; `off` means it is not. The keypad opening path requires this entity to positively report `off`, so a missing/unknown/unavailable entity also blocks opening. Debug mode does not block close-only actions.
 
 RFID commissioning currently logs decoded RFID credentials and raw Wiegand frames over eight bits. Remove those RFID diagnostic logs after commissioning if they are no longer useful.
 
