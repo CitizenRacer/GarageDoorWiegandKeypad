@@ -1,0 +1,135 @@
+# Home Assistant automation fragment for Garage Door Wiegand Keypad.
+#
+# This automation complements script.garage_keypad_open_garage. When that
+# script finds the house alarm armed, it disarms the alarm and stores the exact
+# prior armed mode in input_select.garage_keypad_alarm_restore_mode. This
+# automation restores that mode only after the garage door is closed.
+#
+# If the house alarm was already disarmed before keypad access, the opening
+# script leaves the helper at `none`, so this automation does nothing.
+#
+# If somebody manually re-arms the alarm before the garage closes, this
+# automation preserves their chosen armed state and clears the pending restore
+# marker once the door is closed instead of overriding the manual choice.
+#
+# Required helper:
+#   input_select.garage_keypad_alarm_restore_mode
+#   options:
+#     - none
+#     - armed_home
+#     - armed_away
+#     - armed_night
+#     - armed_vacation
+#     - armed_custom_bypass
+#   initial/default: none
+
+- id: "1787327095781"
+  alias: Garage Keypad - Restore Alarm After Garage Closes
+  description: >-
+    If the garage keypad opening flow disarmed the house alarm, restore the
+    exact prior armed mode after the garage door closes. The persistent
+    input_select records keypad ownership of the disarm. If the alarm was
+    already disarmed before keypad access, this automation does nothing. If
+    someone manually re-arms before the door closes, the pending restore marker
+    is cleared without changing their chosen armed state.
+  triggers:
+    - trigger: state
+      entity_id: cover.ratgdov25i_15cde7_door
+      to: closed
+    - trigger: state
+      entity_id: alarm_control_panel.5744_surety_5744
+      to: disarmed
+    - trigger: state
+      entity_id: alarm_control_panel.5744_surety_5744
+      to: armed_home
+    - trigger: state
+      entity_id: alarm_control_panel.5744_surety_5744
+      to: armed_away
+    - trigger: state
+      entity_id: alarm_control_panel.5744_surety_5744
+      to: armed_night
+    - trigger: state
+      entity_id: alarm_control_panel.5744_surety_5744
+      to: armed_vacation
+    - trigger: state
+      entity_id: alarm_control_panel.5744_surety_5744
+      to: armed_custom_bypass
+  conditions:
+    - condition: state
+      entity_id: cover.ratgdov25i_15cde7_door
+      state: closed
+    - condition: not
+      conditions:
+        - condition: state
+          entity_id: input_select.garage_keypad_alarm_restore_mode
+          state: none
+  actions:
+    - choose:
+        - conditions:
+            - condition: state
+              entity_id: alarm_control_panel.5744_surety_5744
+              state: disarmed
+          sequence:
+            - choose:
+                - conditions:
+                    - condition: state
+                      entity_id: input_select.garage_keypad_alarm_restore_mode
+                      state: armed_home
+                  sequence:
+                    - action: alarm_control_panel.alarm_arm_home
+                      target:
+                        entity_id: alarm_control_panel.5744_surety_5744
+                - conditions:
+                    - condition: state
+                      entity_id: input_select.garage_keypad_alarm_restore_mode
+                      state: armed_away
+                  sequence:
+                    - action: alarm_control_panel.alarm_arm_away
+                      target:
+                        entity_id: alarm_control_panel.5744_surety_5744
+                - conditions:
+                    - condition: state
+                      entity_id: input_select.garage_keypad_alarm_restore_mode
+                      state: armed_night
+                  sequence:
+                    - action: alarm_control_panel.alarm_arm_night
+                      target:
+                        entity_id: alarm_control_panel.5744_surety_5744
+                - conditions:
+                    - condition: state
+                      entity_id: input_select.garage_keypad_alarm_restore_mode
+                      state: armed_vacation
+                  sequence:
+                    - action: alarm_control_panel.alarm_arm_vacation
+                      target:
+                        entity_id: alarm_control_panel.5744_surety_5744
+                - conditions:
+                    - condition: state
+                      entity_id: input_select.garage_keypad_alarm_restore_mode
+                      state: armed_custom_bypass
+                  sequence:
+                    - action: alarm_control_panel.alarm_arm_custom_bypass
+                      target:
+                        entity_id: alarm_control_panel.5744_surety_5744
+        - conditions:
+            - condition: state
+              entity_id: alarm_control_panel.5744_surety_5744
+              state:
+                - armed_home
+                - armed_away
+                - armed_night
+                - armed_vacation
+                - armed_custom_bypass
+          sequence:
+            - action: input_select.select_option
+              target:
+                entity_id: input_select.garage_keypad_alarm_restore_mode
+              data:
+                option: none
+            - action: logbook.log
+              data:
+                name: Garage Keypad
+                message: Garage closed; alarm restore completed
+                entity_id: input_select.garage_keypad_alarm_restore_mode
+  mode: queued
+  max: 10
