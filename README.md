@@ -2,7 +2,7 @@
 
 ESPHome firmware and Home Assistant configuration for a classic ESP32-based garage-door Wiegand keypad/RFID controller.
 
-The controller is an **ESP32S 30-pin USB-C NodeMCU development board with ESP32-WROOM-32 and CP2102**. The detected SoC is an **ESP32-D0WD-V3**.
+The controller is an **ESP32S 30-pin USB-C NodeMCU development board with ESP32-WROOM-32 and CP2102**. The detected SoC is an **ESP32-D0WD-V3**. The active outdoor reader/keypad is a **Retekess T-AC04** using Wiegand output.
 
 **GitHub `main` is the authoritative firmware/configuration source.** ESPHome Device Builder keeps only a small local wrapper containing secret substitutions and loads the firmware from this repository as a remote Git package.
 
@@ -10,11 +10,18 @@ The controller is an **ESP32S 30-pin USB-C NodeMCU development board with ESP32-
 
 The current repository firmware is **v18**.
 
-v18 exposes the compile-time keypad debug state as the **Debug Mode** diagnostic binary sensor for Home Assistant. The garage-opening API is designed to fail closed: it can run only when opening has been explicitly enabled, the ESP32 positively reports Debug Mode off, and the house alarm positively reports disarmed. PIN and RFID validators remain disconnected from garage-door control until opening is explicitly enabled.
+v18 exposes the compile-time keypad debug state as the **Debug Mode** diagnostic binary sensor for Home Assistant. Firmware versioning is owned by `esphome/garage-keypad.yaml`; its `firmware_version` substitution is incremented for every repository check-in that changes that file.
 
-v17 added HMAC-protected RFID authorization while preserving the existing PIN path. Wiegand RFID credentials are decoded by ESPHome, logged during commissioning, transformed on the ESP32 with HMAC-SHA256 using the existing BLK3 device key, and sent to Home Assistant only as a 64-character verifier.
+The latest Home Assistant access-control workflow does not require a firmware change, so firmware remains v18:
 
-The firmware version is exposed through the ESPHome project version and the **Firmware Version** diagnostic entity. `esphome/garage-keypad.yaml` increments `firmware_version` for every repository check-in of that file.
+- valid PIN and RFID credentials call the guarded keypad door-action API;
+- if the garage is already open, a valid credential closes it immediately without changing the alarm;
+- opening requires the explicit opening-enable helper to be on and the ESP32 Debug Mode entity to positively report off;
+- if the house alarm is already disarmed, the garage opens normally;
+- if the alarm is in a supported armed mode, the keypad flow disarms it, remembers the exact prior armed mode, confirms disarm, and then opens the garage;
+- after the garage closes, the alarm is restored only if the keypad flow was the thing that disarmed it;
+- a manual re-arm before garage closure is preserved rather than overwritten;
+- unknown, unavailable, triggered, or otherwise unsupported alarm states fail closed for opening.
 
 ## Security design
 
@@ -66,21 +73,58 @@ The RFID verifier prevents the Home Assistant authorization file from containing
 
 The device-specific 256-bit HMAC key is stored in ESP32 eFuse **BLK3**, permanently write-protected, and intentionally left readable by firmware because this classic ESP32 has no dedicated hardware HMAC peripheral. See [`docs/HMAC_PIN_DESIGN.md`](docs/HMAC_PIN_DESIGN.md).
 
-### Garage-opening API safety gates
+## Garage keypad door-action logic
 
-The live Home Assistant opening API is `script.garage_keypad_open_garage`. It is intentionally disabled by default and is not currently called by either credential validator.
+Both valid PIN and valid RFID paths call:
 
-Before `cover.open_cover` can run, Home Assistant requires all three native state conditions to pass:
+```text
+script.garage_keypad_open_garage
+```
+
+Despite the historical script name, it is now the keypad **door-action API**.
+
+### If the garage is already open
+
+A valid credential calls `cover.close_cover` immediately. This close path does not disarm, arm, or otherwise modify the house alarm.
+
+The safety interlocks below are opening interlocks. Debug Mode is an absolute lockout against **opening** through the keypad API; it does not prevent an already-open garage from being closed by a valid credential.
+
+### If the garage is not already open
+
+Opening first requires:
 
 ```text
 input_boolean.garage_keypad_opening_enabled == on
 binary_sensor.garage_garage_keypad_debug_mode == off
-alarm_control_panel.5744_surety_5744 == disarmed
 ```
 
-These are fail-closed checks. `unknown`, `unavailable`, a missing debug entity, debug mode on, any armed alarm state, or opening-enable off stops the script before garage-door control.
+The alarm is then handled as follows:
 
-**Debug mode is an absolute lockout.** The garage must never be opened through this API while the keypad is in debug mode.
+- `disarmed`: proceed to opening without setting an alarm-restore marker;
+- `armed_home`, `armed_away`, `armed_night`, `armed_vacation`, or `armed_custom_bypass`: remember that exact mode, disarm, wait up to 15 seconds for confirmed `disarmed`, store the restore marker, then open;
+- `unknown`, `unavailable`, `triggered`, or any other state: the final confirmed-disarmed condition fails and the garage does not open.
+
+The actual `cover.open_cover` action cannot run until the alarm positively reports `disarmed`.
+
+### Restoring the alarm after garage closure
+
+The companion automation is:
+
+```text
+automation.garage_keypad_restore_alarm_after_garage_closes
+```
+
+and its checked-in fragment is [`homeassistant/garage-keypad-automation.yaml`](homeassistant/garage-keypad-automation.yaml).
+
+The persistent helper `input_select.garage_keypad_alarm_restore_mode` records whether the keypad opening flow owns a pending alarm restore and which armed mode to restore.
+
+When the garage reaches `closed`:
+
+- marker `none` -> do nothing;
+- marker set + alarm still `disarmed` -> restore the recorded armed mode;
+- marker set + alarm already manually re-armed -> preserve the current armed state and clear the marker.
+
+This is what makes the re-arm behavior conditional on the keypad flow having disarmed the alarm in the first place.
 
 ## Threat-model note
 
@@ -106,7 +150,11 @@ This HMAC design primarily hardens configuration and backup disclosure. If an at
 - Administrative PIN-to-HMAC generator action and Home Assistant helper script
 - Script trace storage disabled where PIN/RFID verifier material is handled
 - ESP32 Debug Mode diagnostic exposed to Home Assistant
-- Fail-closed garage-opening API with explicit enable, debug-mode lockout, and alarm-disarmed gate
+- Valid PIN/RFID credentials routed to one guarded keypad door-action script
+- Valid credential closes an already-open garage without changing the alarm
+- Fail-closed opening gate with explicit enable and debug-mode lockout
+- Conditional alarm disarm before opening and exact-mode restore after closure
+- Latest valid/invalid keypad result recorded in `input_text.garage_keypad_activity`
 - Wi-Fi signal, uptime, die temperature, IP, SSID, MAC, and firmware diagnostics
 
 The ESPHome HTTP `web_server` is intentionally disabled. Management and telemetry use the encrypted native API instead of exposing an additional plaintext HTTP interface.
@@ -127,13 +175,14 @@ GarageDoorWiegandKeypad/
 │   └── secrets.example.yaml
 └── homeassistant/
     ├── garage-keypad-script.yaml
+    ├── garage-keypad-automation.yaml
     ├── garage-keypad-users.example.yaml
     └── secrets.example.yaml
 ```
 
 ## Hardware and wiring
 
-The S20-ID keypad feeds Wiegand D0 and D1 through the HiLetgo BSS138 level shifter before reaching the ESP32.
+The Retekess T-AC04 keypad/reader feeds Wiegand D0 and D1 through the HiLetgo BSS138 level shifter before reaching the ESP32.
 
 Current default wiring:
 
@@ -148,12 +197,12 @@ These pins are substitutions and can be overridden from the local Device Builder
 
 | Qty | Part | Purpose |
 |---:|---|---|
-| 1 | S20-ID IP68 Wiegand keypad / RFID reader | Outdoor keypad and Wiegand source |
+| 1 | Retekess T-AC04 Wiegand keypad / RFID reader | Outdoor keypad and Wiegand source |
 | 1 | ESP32S 30-pin ESP32-WROOM-32 board | Controller |
 | 1 | eletechsup ES350+485 30-pin expansion board | Screw-terminal carrier |
 | 1 | MEAN WELL HDR-30-12 | 12 V DIN-rail power supply |
 | 1 | HiLetgo 4-channel BSS138 level shifter | Wiegand level shifting |
-| As needed | 4-conductor 22 AWG security wire | Keypad-to-controller cable |
+| As needed | 4-conductor security wire | Keypad-to-controller cable |
 | As needed | 18 AWG stranded wire | Internal power wiring |
 
 ## ESPHome Device Builder setup
@@ -172,7 +221,7 @@ substitutions:
 
   # Testing only. This logs PIN HMAC verifiers, never plaintext keypad PINs.
   # It also sets the Home Assistant Debug Mode diagnostic to on, which is an
-  # absolute lockout for the garage-opening API.
+  # absolute lockout for garage OPENING through the keypad API.
   keypad_debug_logging: "false"
 
 packages:
@@ -246,6 +295,8 @@ field: hmac
 
 If HMAC generation fails, the firmware fails closed and supplies an invalid/empty verifier that cannot authorize.
 
+A recognized verifier records the friendly user/activity result and then calls the guarded keypad door-action script.
+
 ## RFID processing
 
 ESPHome's Wiegand component decodes parity-valid tag frames and supplies the decoded credential to `on_tag`. The commissioning log is:
@@ -275,7 +326,7 @@ script.garage_keypad_validate_rfid_hmac
 field: hmac
 ```
 
-The tested red RFID tag decodes as `5400449`; the live authorization database should contain its **HMAC verifier**, not `5400449`, under the nested `rfid:` map with friendly name `Red Tag`.
+A recognized RFID verifier records/logs the friendly user result and then calls the same guarded keypad door-action script as a valid PIN.
 
 ## Home Assistant authorization database
 
@@ -285,35 +336,48 @@ The live authorization database is one local file:
 /config/garage_keypad_users.yaml
 ```
 
-Existing PIN HMAC entries remain at the top level. RFID HMAC entries live under `rfid:`:
+PIN HMAC entries remain at the top level. RFID HMAC entries live under `rfid:`:
 
 ```yaml
 "<64-character PIN HMAC>": "Example PIN User"
 
 rfid:
-  "<64-character RFID HMAC>": "Red Tag"
+  "<64-character RFID HMAC>": "Example RFID User"
 ```
 
-This shape intentionally avoids migrating the existing PIN map.
+Do not store plaintext PINs or raw RFID credentials in this file, and **do not commit the live authorization file**. It is intentionally excluded from local Home Assistant version control as well as from this public repository workflow.
 
-Do not store plaintext PINs or raw RFID credentials in this file, and do not commit the live file.
-
-## Home Assistant scripts
+## Home Assistant scripts and automation
 
 [`homeassistant/garage-keypad-script.yaml`](homeassistant/garage-keypad-script.yaml) contains:
 
-- `script.garage_keypad_validate_hmac` — PIN verifier lookup and notification path; no garage control.
-- `script.garage_keypad_validate_rfid_hmac` — RFID verifier lookup under `rfid:` with logging/notification; no garage control.
-- `script.garage_keypad_open_garage` — fail-closed garage-opening API, disabled unless the explicit enable helper is on and both safety-state checks pass.
+- `script.garage_keypad_validate_hmac` — PIN verifier lookup, notification/activity logging, then guarded door action on success;
+- `script.garage_keypad_validate_rfid_hmac` — nested RFID verifier lookup, notification/logging/activity, then guarded door action on success;
+- `script.garage_keypad_open_garage` — guarded keypad door-action API: close if already open, otherwise use the opening/alarm safety flow;
 - `script.garage_keypad_generate_pin_hmac` — administrative PIN HMAC helper.
 
-The opening API requires this Home Assistant helper:
+[`homeassistant/garage-keypad-automation.yaml`](homeassistant/garage-keypad-automation.yaml) contains the alarm-restore automation described above.
+
+Required helpers:
 
 ```text
 input_boolean.garage_keypad_opening_enabled
+input_select.garage_keypad_alarm_restore_mode
+input_text.garage_keypad_activity
 ```
 
-It must remain **off** until garage opening is explicitly enabled. Turning it on is not sufficient by itself: Debug Mode must also be off and the house alarm must be disarmed.
+The restore-mode helper options are:
+
+```text
+none
+armed_home
+armed_away
+armed_night
+armed_vacation
+armed_custom_bypass
+```
+
+Use `none` as its initial/default option.
 
 The notification action name is local configuration:
 
@@ -336,9 +400,7 @@ The firmware exposes the administrative ESPHome action:
 esphome.garage_keypad_generate_pin_hmac
 ```
 
-It accepts 4-8 numeric characters and returns the HMAC for the exact supplied string. Because the current tested RFID credential `5400449` is a seven-digit numeric string and RFID HMACs use the exact decoded credential with the same BLK3 key, this existing action can also be used once to obtain the verifier needed to register the tested `Red Tag` entry.
-
-The BLK3 key itself is never returned.
+It accepts 4-8 numeric characters and returns the HMAC for the exact supplied string. The BLK3 key itself is never returned.
 
 ## Home Assistant action permission
 
@@ -354,7 +416,7 @@ keypad_debug_logging: "true"
 
 Normal keypad entry still does **not** log plaintext PINs. Debug mode logs only the resulting PIN HMAC verifier.
 
-v18 also exposes the same compile-time setting to Home Assistant as the **Debug Mode** diagnostic binary sensor. `on` means debug mode is active; `off` means it is not. The garage-opening API requires this entity to positively report `off`, so a missing/unknown/unavailable entity also blocks opening.
+v18 exposes the same compile-time setting to Home Assistant as the **Debug Mode** diagnostic binary sensor. `on` means debug mode is active; `off` means it is not. The keypad opening path requires this entity to positively report `off`, so a missing/unknown/unavailable entity also blocks opening.
 
 RFID commissioning currently logs decoded RFID credentials and raw Wiegand frames over eight bits. Remove those RFID diagnostic logs after commissioning if they are no longer useful.
 
