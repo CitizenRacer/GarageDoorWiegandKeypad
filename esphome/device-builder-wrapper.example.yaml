@@ -8,12 +8,13 @@ substitutions:
   fallback_ap_password: !secret fallback_ap_password
   garage_keypad_api_encryption_key: !secret garage_keypad_api_encryption_key
 
-  # TESTING ONLY: v14 never logs plaintext keypad PINs. When enabled, this logs
-  # the completed 64-character HMAC verifier so the live keypad path can be
-  # compared with the Home Assistant verifier map. HMAC verifiers are still
-  # authorization material, so remove this override or set it to "false" after
-  # testing.
-  keypad_debug_logging: "true"
+  # PRODUCTION DEFAULT: keep debug logging off. Firmware never intentionally
+  # logs plaintext keypad PINs. When this override is temporarily set to
+  # "true", completed PIN HMAC verifiers are logged for troubleshooting and
+  # the v18 Debug Mode diagnostic reports on. HMAC verifiers are authorization
+  # material, and Debug Mode is an absolute lockout against opening the garage
+  # through the keypad API.
+  keypad_debug_logging: "false"
 
   # Optional Wiegand GPIO overrides. The remote firmware defaults to GPIO22
   # for D0 (Green via HV3/LV3) and GPIO19 for D1 (White via HV2/LV2), so these
