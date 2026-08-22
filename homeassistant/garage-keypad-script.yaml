@@ -8,8 +8,7 @@
 # script is really the guarded keypad door-action API:
 #   * if the garage is already open, the valid credential closes it immediately
 #     and does not change the house alarm;
-#   * otherwise, opening requires explicit enablement and Debug Mode positively
-#     off;
+#   * otherwise, opening requires Debug Mode positively off;
 #   * if the house alarm is in a supported armed mode, the script disarms it,
 #     records that exact prior mode, confirms disarm, and then opens the garage;
 #   * if the alarm was already disarmed, it opens without setting a restore
@@ -32,10 +31,6 @@
 #     garage_keypad_notify_service: "notify.mobile_app_your_phone"
 #
 # Required Home Assistant helpers (created in the UI for the live installation):
-#   input_boolean.garage_keypad_opening_enabled
-#     Explicit opening gate. Keep off until garage opening is intentionally
-#     enabled.
-#
 #   input_select.garage_keypad_alarm_restore_mode
 #     Options: none, armed_home, armed_away, armed_night, armed_vacation,
 #     armed_custom_bypass. Initial/default option: none.
@@ -55,7 +50,7 @@ garage_keypad_validate_hmac:
     garage ESPHome keypad against /config/garage_keypad_users.yaml. Plaintext
     PINs are not stored or accepted. On a valid credential, notify/log and
     invoke the guarded garage-keypad door-action API; the opening path retains
-    its explicit enable and debug-mode safety gates.
+    its debug-mode and alarm safety gates.
   mode: queued
   max: 10
 
@@ -131,8 +126,8 @@ garage_keypad_validate_rfid_hmac:
     Validate an RFID HMAC-SHA256 verifier submitted by the ESPHome garage
     keypad, resolve the friendly user from the nested rfid map, and notify/log
     the result. On a valid credential, invoke the guarded garage-keypad
-    door-action API; the opening path retains its explicit enable and debug-mode
-    safety gates.
+    door-action API; the opening path retains its debug-mode and alarm safety
+    gates.
   mode: queued
   max: 10
 
@@ -228,12 +223,11 @@ garage_keypad_open_garage:
   description: >-
     Garage keypad door-action API. If the garage door is already open, a valid
     keypad credential closes it immediately without changing the alarm.
-    Otherwise, opening remains fail-closed: opening must be explicitly enabled
-    and ESP32 debug mode must positively report off. If the house alarm is
-    armed, this script disarms it, records the exact prior armed mode for later
-    restoration, verifies disarm, then opens the garage. Unknown or unavailable
-    alarm states block opening. If the alarm was already disarmed before keypad
-    access, no restore marker is set.
+    Otherwise, opening remains fail-closed: ESP32 debug mode must positively
+    report off. If the house alarm is armed, this script disarms it, records the
+    exact prior armed mode for later restoration, verifies disarm, then opens
+    the garage. Unknown or unavailable alarm states block opening. If the alarm
+    was already disarmed before keypad access, no restore marker is set.
   icon: mdi:garage-lock
   mode: single
   trace:
@@ -252,11 +246,6 @@ garage_keypad_open_garage:
               target:
                 entity_id: cover.ratgdov25i_15cde7_door
       default:
-        - alias: Require explicit garage keypad opening enable
-          condition: state
-          entity_id: input_boolean.garage_keypad_opening_enabled
-          state: "on"
-
         - alias: Require ESP32 debug mode off
           condition: state
           entity_id: binary_sensor.garage_garage_keypad_debug_mode
@@ -341,7 +330,7 @@ garage_keypad_generate_pin_hmac:
       name: Garage Code
       description: >-
         Garage keypad code to HMAC. Treated as text so leading zeroes are
-        preserved.
+        preserved exactly.
       required: true
       selector:
         text:
