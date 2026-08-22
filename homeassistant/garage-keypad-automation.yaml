@@ -1,71 +1,100 @@
-# Home Assistant automation fragment for Garage Door Wiegand Keypad.
+# Home Assistant automation fragment for Garage Door Wiegand Keypad firmware v19.
 #
-# This automation complements script.garage_keypad_open_garage. When that
-# script finds the house alarm armed, it disarms the alarm and stores the exact
-# prior armed mode in input_select.garage_keypad_alarm_restore_mode. This
-# automation restores that mode only after the garage door is closed.
+# input_select.garage_keypad_alarm_restore_mode is an ownership marker:
+# `none` means no keypad-owned restore is pending; an armed mode means the
+# keypad opening flow itself disarmed the alarm and must restore that exact mode.
 #
-# If the house alarm was already disarmed before keypad access, the opening
-# script leaves the helper at `none`, so this automation does nothing.
+# Behavior:
+#   * on garage -> closed, restore the saved mode only if the alarm is still
+#     disarmed;
+#   * on any transition to a supported armed state while a marker is pending,
+#     preserve that armed state and immediately clear the marker;
+#   * if the garage closes with a marker pending but the alarm is already in a
+#     supported armed state, preserve it and clear the stale marker.
 #
-# If somebody manually re-arms the alarm before the garage closes, this
-# automation preserves their chosen armed state and clears the pending restore
-# marker once the door is closed instead of overriding the manual choice.
-#
-# Required helper:
-#   input_select.garage_keypad_alarm_restore_mode
-#   options:
-#     - none
-#     - armed_home
-#     - armed_away
-#     - armed_night
-#     - armed_vacation
-#     - armed_custom_bypass
-#   initial/default: none
+# This intentionally does not trigger on alarm -> disarmed. The keypad opening
+# script may disarm while the garage is still closed; that intermediate state
+# must not cause restoration before the garage has opened and later closed.
 
 - id: "1787327095781"
   alias: Garage Keypad - Restore Alarm After Garage Closes
   description: >-
-    If the garage keypad opening flow disarmed the house alarm, restore the
-    exact prior armed mode after the garage door closes. The persistent
-    input_select records keypad ownership of the disarm. If the alarm was
-    already disarmed before keypad access, this automation does nothing. If
-    someone manually re-arms before the door closes, the pending restore marker
-    is cleared without changing their chosen armed state.
+    Restore the exact alarm mode only when the keypad opening flow previously
+    disarmed the alarm. A garage-closed transition performs the restore if the
+    alarm is still disarmed. Any transition back to a supported armed state is
+    treated as an intentional re-arm: preserve that state and immediately clear
+    the pending keypad restore marker. This avoids overriding a manual re-arm
+    and avoids restoring merely because the keypad just disarmed the alarm while
+    the garage was still closed.
+
   triggers:
     - trigger: state
       entity_id: cover.ratgdov25i_15cde7_door
       to: closed
-    - trigger: state
-      entity_id: alarm_control_panel.5744_surety_5744
-      to: disarmed
+      id: garage_closed
+
     - trigger: state
       entity_id: alarm_control_panel.5744_surety_5744
       to: armed_home
+      id: alarm_rearmed
+
     - trigger: state
       entity_id: alarm_control_panel.5744_surety_5744
       to: armed_away
+      id: alarm_rearmed
+
     - trigger: state
       entity_id: alarm_control_panel.5744_surety_5744
       to: armed_night
+      id: alarm_rearmed
+
     - trigger: state
       entity_id: alarm_control_panel.5744_surety_5744
       to: armed_vacation
+      id: alarm_rearmed
+
     - trigger: state
       entity_id: alarm_control_panel.5744_surety_5744
       to: armed_custom_bypass
+      id: alarm_rearmed
+
   conditions:
-    - condition: state
-      entity_id: cover.ratgdov25i_15cde7_door
-      state: closed
     - condition: not
       conditions:
         - condition: state
           entity_id: input_select.garage_keypad_alarm_restore_mode
           state: none
+
   actions:
     - choose:
+        # A supported armed-state transition while the keypad restore marker is
+        # pending is authoritative. Preserve it and relinquish keypad ownership
+        # immediately, even if the garage is still open.
         - conditions:
+            - condition: trigger
+              id: alarm_rearmed
+          sequence:
+            - alias: Clear pending restore after any re-arm
+              action: input_select.select_option
+              target:
+                entity_id: input_select.garage_keypad_alarm_restore_mode
+              data:
+                option: none
+
+            - alias: Record preserved re-arm
+              action: logbook.log
+              data:
+                name: Garage Keypad
+                message: >-
+                  Alarm re-armed while keypad restore was pending; preserved
+                  current armed state and cleared restore marker
+                entity_id: input_select.garage_keypad_alarm_restore_mode
+
+        # Normal keypad-owned restoration: only the garage-closed transition
+        # may restore, and only while the alarm is still disarmed.
+        - conditions:
+            - condition: trigger
+              id: garage_closed
             - condition: state
               entity_id: alarm_control_panel.5744_surety_5744
               state: disarmed
@@ -79,6 +108,7 @@
                     - action: alarm_control_panel.alarm_arm_home
                       target:
                         entity_id: alarm_control_panel.5744_surety_5744
+
                 - conditions:
                     - condition: state
                       entity_id: input_select.garage_keypad_alarm_restore_mode
@@ -87,6 +117,7 @@
                     - action: alarm_control_panel.alarm_arm_away
                       target:
                         entity_id: alarm_control_panel.5744_surety_5744
+
                 - conditions:
                     - condition: state
                       entity_id: input_select.garage_keypad_alarm_restore_mode
@@ -95,6 +126,7 @@
                     - action: alarm_control_panel.alarm_arm_night
                       target:
                         entity_id: alarm_control_panel.5744_surety_5744
+
                 - conditions:
                     - condition: state
                       entity_id: input_select.garage_keypad_alarm_restore_mode
@@ -103,6 +135,7 @@
                     - action: alarm_control_panel.alarm_arm_vacation
                       target:
                         entity_id: alarm_control_panel.5744_surety_5744
+
                 - conditions:
                     - condition: state
                       entity_id: input_select.garage_keypad_alarm_restore_mode
@@ -111,7 +144,12 @@
                     - action: alarm_control_panel.alarm_arm_custom_bypass
                       target:
                         entity_id: alarm_control_panel.5744_surety_5744
+
+        # Defensive cleanup for a close event that finds the alarm already
+        # armed. Do not change the armed state; just remove stale ownership.
         - conditions:
+            - condition: trigger
+              id: garage_closed
             - condition: state
               entity_id: alarm_control_panel.5744_surety_5744
               state:
@@ -121,15 +159,21 @@
                 - armed_vacation
                 - armed_custom_bypass
           sequence:
-            - action: input_select.select_option
+            - alias: Clear stale pending restore without changing armed state
+              action: input_select.select_option
               target:
                 entity_id: input_select.garage_keypad_alarm_restore_mode
               data:
                 option: none
-            - action: logbook.log
+
+            - alias: Record preserved armed state at close
+              action: logbook.log
               data:
                 name: Garage Keypad
-                message: Garage closed; alarm restore completed
+                message: >-
+                  Garage closed with alarm already armed; preserved current
+                  armed state and cleared restore marker
                 entity_id: input_select.garage_keypad_alarm_restore_mode
+
   mode: queued
   max: 10

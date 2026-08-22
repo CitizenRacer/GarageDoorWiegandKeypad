@@ -9,16 +9,18 @@ substitutions:
   garage_keypad_api_encryption_key: !secret garage_keypad_api_encryption_key
 
   # PRODUCTION DEFAULT: keep debug logging off. Firmware never intentionally
-  # logs plaintext keypad PINs. When this override is temporarily set to
-  # "true", completed PIN HMAC verifiers are logged for troubleshooting and
-  # the v18 Debug Mode diagnostic reports on. HMAC verifiers are authorization
-  # material, and Debug Mode is an absolute lockout against opening the garage
-  # through the keypad API.
+  # logs plaintext keypad PINs. When temporarily set to "true", completed PIN
+  # HMAC verifiers may be logged for troubleshooting and firmware v19's Debug
+  # Mode diagnostic reports on. HMAC verifiers are authorization material.
+  #
+  # The Home Assistant opening path fails closed unless Debug Mode positively
+  # reports exactly off. on, unknown, unavailable, or a missing entity blocks
+  # opening. Debug Mode does not block closing an already-open garage.
   keypad_debug_logging: "false"
 
   # Optional Wiegand GPIO overrides. The remote firmware defaults to GPIO22
-  # for D0 (Green via HV3/LV3) and GPIO19 for D1 (White via HV2/LV2), so these
-  # are normally unnecessary.
+  # for D0 (Retekess T-AC04 Green via HV3/LV3) and GPIO19 for D1 (T-AC04 White
+  # via HV2/LV2), so these are normally unnecessary.
   # garage_keypad_d0_pin: "GPIO22"
   # garage_keypad_d1_pin: "GPIO19"
 

@@ -10,12 +10,12 @@ Amazon links supplied by the project owner are preserved as-is because they alre
 
 | Qty | Part | Purpose | Purchase link |
 |---:|---|---|---|
-| 1 | Retekess T-AC04 Wiegand keypad / RFID reader | Outdoor PIN keypad and RFID reader | [Amazon](https://www.amazon.com/dp/B07QSFR4FF?tag=k-20) |
+| 1 | Retekess T-AC04 Wiegand keypad / RFID reader | Active outdoor PIN keypad and RFID reader | [Amazon](https://www.amazon.com/dp/B07QSFR4FF?tag=k-20) |
 | 1 | 30-pin ESP32-WROOM-32 USB-C development board, CP2102 | ESPHome controller | [Amazon](https://www.amazon.com/dp/B0CR5Y2JVD?tag=k-20) |
 | 1 | ESP32 DIN-rail carrier with integrated DC-DC buck converter | DIN mounting, screw-terminal breakout, and regulated ESP32 power from the 12 V supply | [AliExpress](https://a.aliexpress.com/_mLu7eDp) |
 | 1 | MEAN WELL HDR-30-12 DIN-rail power supply | 120 VAC to 12 VDC power supply for the keypad/control system | [Amazon](https://www.amazon.com/dp/B06XWRWSHT?tag=k-20) |
-| 1 | HiLetgo 4-channel BSS138 bidirectional logic-level converter | Wiegand D0/D1 level shifting between the 12 V reader side and ESP32 logic | [Amazon](https://www.amazon.com/dp/B07F7W91LC?tag=k-20) |
-| 1 | Custom 3D-printed HiLetgo DIN-rail mount | Secures the level-shifter PCB to the DIN rail | Repository CAD: [`../cad/ChatGPT_HiLetgo_Level_Shifter_DIN_Mount.scad`](../cad/ChatGPT_HiLetgo_Level_Shifter_DIN_Mount.scad) |
+| 1 | HiLetgo 4-channel BSS138 bidirectional logic-level converter | Wiegand D0/D1 level shifting between the reader side and ESP32 logic | [Amazon](https://www.amazon.com/dp/B07F7W91LC?tag=k-20) |
+| 1 | Custom 3D-printed HiLetgo DIN-rail cable-clamp mount | Secures the level-shifter PCB to the DIN rail | Repository CAD: [`../cad/HiLetgo_Level_Shifter_DIN_CableClamp.scad`](../cad/HiLetgo_Level_Shifter_DIN_CableClamp.scad) |
 
 ### Power architecture
 
@@ -55,8 +55,8 @@ MEAN WELL HDR-30-12
 The installed Wiegand signal path is:
 
 ```text
-T-AC04 Green D0 -> level shifter HV3/LV3 -> ESP32 GPIO22
-T-AC04 White D1 -> level shifter HV2/LV2 -> ESP32 GPIO19
+Retekess T-AC04 Green D0 -> level shifter HV3/LV3 -> ESP32 GPIO22
+Retekess T-AC04 White D1 -> level shifter HV2/LV2 -> ESP32 GPIO19
 ```
 
 The T-AC04 is powered from the 12 V supply. The ESP32 carrier is also fed from 12 V and uses its integrated buck converter to power the ESP32.
@@ -70,10 +70,11 @@ These are required by the complete installed system but are not part of the keyp
 - Home Assistant
 - ESPHome Device Builder
 - Home Assistant alarm integration used by the guarded opening workflow
+- Kitchen Alexa target used for successful-opening announcements
 
 ## Notes
 
-- The active reader is the **Retekess T-AC04**. Older project discussions referenced an S20-ID reader; that is not the final installed reader.
-- The ESP32 is the classic ESP32-WROOM-32 design used by the current firmware, not one of the later ESP32-S3 spare boards.
-- The HiLetgo level shifter is mounted using the project's custom DIN-rail part.
-- The live authorization database, HMAC key material, PINs, and RFID credentials are intentionally **not** part of this document or repository.
+- The active reader is the **Retekess T-AC04**.
+- The ESP32 is the classic ESP32-WROOM-32 design used by firmware v19.
+- The HiLetgo level shifter is mounted using the project's checked-in DIN-rail cable-clamp part.
+- The live authorization database, HMAC key material, PINs, RFID credential values, and real HMAC verifiers are intentionally **not** part of this document or repository.
