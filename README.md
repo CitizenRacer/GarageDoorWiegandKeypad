@@ -74,7 +74,7 @@ target          = cover.ratgdov25i_15cde7_door
 
 LCM returns `valid`, `user`, and `reason`. Invalid credentials stop in the firmware. Valid credentials call `script.garage_keypad_open_garage` with LCM's friendly user name.
 
-Enable **Allow the device to perform Home Assistant actions** for the Garage Keypad ESPHome integration entry. ESPHome action response handling requires ESPHome 2025.10.0 or later.
+Enable **Allow the device to perform Home Assistant actions** for the Garage Keypad ESPHome integration entry. Use ESPHome and Home Assistant 2025.11.0 or later for reliable action response capture.
 
 ## Debug Mode
 
