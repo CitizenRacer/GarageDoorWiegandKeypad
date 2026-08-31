@@ -1,9 +1,8 @@
 # ESPHome secrets
 esphome/secrets.yaml
 
-# Home Assistant local secrets / live authorization database
+# Home Assistant local files
 homeassistant/secrets.yaml
-homeassistant/garage-keypad-users.yaml
 
 # ESPHome build/cache output
 .esphome/
