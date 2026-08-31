@@ -69,12 +69,23 @@ These are required by the complete installed system but are not part of the keyp
 - ratgdo garage-door interface
 - Home Assistant
 - ESPHome Device Builder
+- Lock Code Manager for production PIN/user authorization
 - Home Assistant alarm integration used by the guarded opening workflow
 - Kitchen Alexa target used for successful-opening announcements
+
+## Current software relationship
+
+The installed classic ESP32-WROOM-32 controller is running **firmware v20**.
+
+v20 sends completed keypad PINs over the encrypted ESPHome native API to `lock_code_manager.use_credential`. Lock Code Manager is the production credential database. Valid credentials are passed by friendly user name to the guarded Home Assistant garage-operation script.
+
+RFID authorization is disabled in v20 even though the T-AC04 hardware can emit RFID Wiegand frames.
+
+The ESP32 still physically contains the BLK3 eFuse bits provisioned by the former v19 HMAC design. Those bits are permanent, but v20 does not read or use them.
 
 ## Notes
 
 - The active reader is the **Retekess T-AC04**.
-- The ESP32 is the classic ESP32-WROOM-32 design used by firmware v19.
+- The ESP32 is the classic ESP32-WROOM-32 design currently used by production firmware v20.
 - The HiLetgo level shifter is mounted using the project's checked-in DIN-rail cable-clamp part.
-- The live authorization database, HMAC key material, PINs, RFID credential values, and real HMAC verifiers are intentionally **not** part of this document or repository.
+- PINs, Lock Code Manager credential data, raw production RFID credential values, and other live authorization material are intentionally **not** part of this document or repository.
