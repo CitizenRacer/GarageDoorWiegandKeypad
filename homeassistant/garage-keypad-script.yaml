@@ -1,16 +1,16 @@
 # Home Assistant script fragment for Garage Door Wiegand Keypad firmware v20.
 #
-# Lock Code Manager performs PIN validation directly through
+# Lock Code Manager performs production PIN validation directly through
 # lock_code_manager.use_credential. Firmware calls this common guarded door
 # action only after LCM returns a valid credential and friendly user name.
 #
 # RFID authorization is disabled in v20. There are no custom PIN/RFID validator
 # scripts, HMAC helpers, or credential-map file dependencies in this fragment.
 #
-# IMPORTANT: keep the production instance's RATGDO motor-start verification and
-# retry enhancements when applying the LCM migration. This checked-in fragment
-# documents the common fail-closed authorization/door-state contract; do not
-# replace a more capable live script with a less capable example.
+# IMPORTANT: this checked-in script is the documented fail-closed baseline. The
+# production live instance also contains RATGDO motor-start verification/retry
+# behavior. Preserve those production enhancements when synchronizing this file;
+# do not replace the more capable live script with this simpler baseline.
 #
 # Required helper:
 #   input_select.garage_keypad_alarm_restore_mode
