@@ -5,7 +5,7 @@ This document describes the v19 HMAC-to-v20 Lock Code Manager migration. It is i
 ## Preconditions
 
 - Lock Code Manager 5.3.0 or later; the production installation currently has the lockless `KOZ2 Locks` entry.
-- ESPHome 2025.10.0 or later for `homeassistant.action` response capture.
+- ESPHome and Home Assistant 2025.11.0 or later for reliable `homeassistant.action` response capture.
 - Garage Keypad ESPHome integration permission **Allow the device to perform Home Assistant actions** enabled.
 - Existing `script.garage_keypad_open_garage` retained unchanged during the authentication migration.
 - Old HMAC scripts and credential map retained until rollback is no longer needed.
