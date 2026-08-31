@@ -6,7 +6,7 @@
 # packages cannot perform !secret lookups, so the local Device Builder wrapper
 # supplies credential substitutions from its local secrets.yaml file.
 substitutions:
-  firmware_version: "20"
+  firmware_version: "21"
 
   # Default ESP32 GPIOs for the low-voltage side of the Wiegand level shifter.
   # Physical wiring:
@@ -158,7 +158,7 @@ wiegand:
                       id(keypad_pin_entry_active) = false;
 
     # ESPHome decodes/parity-checks 26-, 34-, and 37-bit Wiegand RFID frames.
-    # RFID authorization is intentionally disabled in v20. Lock Code Manager's
+    # RFID authorization is intentionally disabled in v21. Lock Code Manager's
     # external-credential path currently manages PINs; do not disguise RFID IDs
     # as PINs. Keep diagnostics so RFID can be migrated cleanly when LCM supports
     # the credential type end to end.
@@ -234,14 +234,30 @@ key_collector:
                           const char *user = check["user"] | "";
                           return std::string(user);
                 else:
-                  - lambda: |-
-                      JsonVariantConst wrapped = response["response"];
-                      if (!wrapped.is<JsonObjectConst>()) {
-                        return;
-                      }
-                      JsonObjectConst check = wrapped.as<JsonObjectConst>();
-                      const char *reason = check["reason"] | "unknown";
-                      ESP_LOGW("keypad", "Credential rejected by Lock Code Manager: %s", reason);
+                  - if:
+                      condition:
+                        lambda: |-
+                          JsonVariantConst wrapped = response["response"];
+                          return wrapped.is<JsonObjectConst>();
+                      then:
+                        - lambda: |-
+                            JsonObjectConst check = response["response"].as<JsonObjectConst>();
+                            const char *reason = check["reason"] | "unknown";
+                            ESP_LOGW("keypad", "Credential rejected by Lock Code Manager: %s", reason);
+                        - homeassistant.action:
+                            action: logbook.log
+                            data:
+                              name: "Garage Keypad"
+                              message: !lambda |-
+                                JsonObjectConst check = response["response"].as<JsonObjectConst>();
+                                const char *reason = check["reason"] | "unknown";
+                                return std::string("Credential rejected - Lock Code Manager reason: ") + reason;
+                              entity_id: "${garage_keypad_source_entity_id}"
+                            on_error:
+                              - logger.log:
+                                  tag: keypad
+                                  level: WARN
+                                  format: "Failed to write rejected credential to Home Assistant Activity"
           on_error:
             - logger.log:
                 tag: keypad
