@@ -1,0 +1,76 @@
+name: Submit runtime dependencies
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+# GitHub's Dependency Submission API requires Contents: write for snapshots.
+permissions:
+  contents: write
+
+jobs:
+  submit-runtime-dependencies:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Submit Lock Code Manager dependency
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import datetime
+          import json
+          import os
+          import urllib.request
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          api_url = os.environ.get("GITHUB_API_URL", "https://api.github.com")
+          server_url = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
+
+          snapshot = {
+              "version": 0,
+              "sha": os.environ["GITHUB_SHA"],
+              "ref": os.environ["GITHUB_REF"],
+              "job": {
+                  "correlator": "garage-keypad-runtime-dependencies",
+                  "id": os.environ["GITHUB_RUN_ID"],
+              },
+              "detector": {
+                  "name": "garage-keypad-runtime-dependency-declaration",
+                  "version": "1.0",
+                  "url": f"{server_url}/{repository}/blob/main/.github/workflows/dependency-submission.yml",
+              },
+              "scanned": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+              "manifests": {
+                  "home-assistant-runtime": {
+                      "name": "Home Assistant runtime dependencies",
+                      "file": {"source_location": "README.md"},
+                      "resolved": {
+                          "lock-code-manager": {
+                              "package_url": "pkg:github/raman325/lock_code_manager",
+                              "relationship": "direct",
+                              "scope": "runtime",
+                          }
+                      },
+                  }
+              },
+          }
+
+          request = urllib.request.Request(
+              f"{api_url}/repos/{repository}/dependency-graph/snapshots",
+              data=json.dumps(snapshot).encode("utf-8"),
+              method="POST",
+              headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                  "X-GitHub-Api-Version": "2022-11-28",
+                  "Content-Type": "application/json",
+              },
+          )
+
+          with urllib.request.urlopen(request) as response:
+              result = json.load(response)
+              print(result.get("message", result))
+          PY
