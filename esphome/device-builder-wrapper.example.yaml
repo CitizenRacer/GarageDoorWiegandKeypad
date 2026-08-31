@@ -1,6 +1,6 @@
 # Copy this configuration into ESPHome Device Builder.
-# The firmware is loaded from the public GitHub repository; secret values are
-# resolved from Device Builder's local secrets.yaml.
+# The production firmware is loaded from the repository's main branch; secret
+# values are resolved from Device Builder's local secrets.yaml.
 substitutions:
   wifi_ssid: !secret wifi_ssid
   wifi_password: !secret wifi_password
@@ -8,11 +8,10 @@ substitutions:
   fallback_ap_password: !secret fallback_ap_password
   garage_keypad_api_encryption_key: !secret garage_keypad_api_encryption_key
 
-  # PRODUCTION DEFAULT: false. For the v20 migration/no-motion test, temporarily
-  # override this to "true" so the Home Assistant guarded door-action script
-  # refuses opening even when Lock Code Manager accepts a credential.
-  #
-  # Debug Mode is a safety gate only. PINs are never intentionally logged.
+  # Production setting for v20. Debug Mode is an independent physical-opening
+  # safety gate; PIN values are never intentionally logged in either state.
+  # Set this to "true" only for an intentional no-motion/maintenance test, then
+  # redeploy and positively confirm the Home Assistant Debug Mode sensor is on.
   keypad_debug_mode: "false"
 
   # Optional Home Assistant / Lock Code Manager overrides. These are not
@@ -26,6 +25,10 @@ substitutions:
   # via HV2/LV2), so these are normally unnecessary.
   # garage_keypad_d0_pin: "GPIO22"
   # garage_keypad_d1_pin: "GPIO19"
+
+# v20 removed the former HMAC generator and Generated PIN HMAC text sensor.
+# Do not carry forward v19-only wrapper entries such as keypad_debug_logging or
+# `!extend generated_pin_hmac`; those IDs/substitutions no longer exist.
 
 packages:
   garage_keypad:
