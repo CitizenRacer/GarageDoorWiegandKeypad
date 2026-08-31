@@ -1,4 +1,8 @@
-# Home Assistant automation fragment for Garage Door Wiegand Keypad firmware v19.
+# Home Assistant automation fragment for Garage Door Wiegand Keypad firmware v20.
+#
+# This automation is independent of credential validation. Lock Code Manager
+# decides whether a PIN is valid; this automation manages only restoration of an
+# alarm mode that the guarded keypad opening flow itself temporarily disarmed.
 #
 # input_select.garage_keypad_alarm_restore_mode is an ownership marker:
 # `none` means no keypad-owned restore is pending; an armed mode means the
