@@ -1,6 +1,6 @@
 # Copy this configuration into ESPHome Device Builder.
-# The firmware is loaded from the public GitHub repository; credential values
-# are resolved from Device Builder's local secrets.yaml.
+# The firmware is loaded from the public GitHub repository; secret values are
+# resolved from Device Builder's local secrets.yaml.
 substitutions:
   wifi_ssid: !secret wifi_ssid
   wifi_password: !secret wifi_password
@@ -8,15 +8,18 @@ substitutions:
   fallback_ap_password: !secret fallback_ap_password
   garage_keypad_api_encryption_key: !secret garage_keypad_api_encryption_key
 
-  # PRODUCTION DEFAULT: keep debug logging off. Firmware never intentionally
-  # logs plaintext keypad PINs. When temporarily set to "true", completed PIN
-  # HMAC verifiers may be logged for troubleshooting and firmware v19's Debug
-  # Mode diagnostic reports on. HMAC verifiers are authorization material.
+  # PRODUCTION DEFAULT: false. For the v20 migration/no-motion test, temporarily
+  # override this to "true" so the Home Assistant guarded door-action script
+  # refuses opening even when Lock Code Manager accepts a credential.
   #
-  # The Home Assistant opening path fails closed unless Debug Mode positively
-  # reports exactly off. on, unknown, unavailable, or a missing entity blocks
-  # opening. Debug Mode does not block closing an already-open garage.
-  keypad_debug_logging: "false"
+  # Debug Mode is a safety gate only. PINs are never intentionally logged.
+  keypad_debug_mode: "false"
+
+  # Optional Home Assistant / Lock Code Manager overrides. These are not
+  # secrets; the remote package contains the production defaults.
+  # lock_code_manager_entry_id: "your_lcm_config_entry_id"
+  # garage_keypad_source_entity_id: "binary_sensor.your_keypad_debug_mode"
+  # garage_door_entity_id: "cover.your_garage_door"
 
   # Optional Wiegand GPIO overrides. The remote firmware defaults to GPIO22
   # for D0 (Retekess T-AC04 Green via HV3/LV3) and GPIO19 for D1 (T-AC04 White

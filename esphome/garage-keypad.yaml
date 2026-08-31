@@ -4,52 +4,47 @@
 #
 # This file is designed to be consumed as a remote ESPHome Git package. Remote
 # packages cannot perform !secret lookups, so the local Device Builder wrapper
-# supplies the credential substitutions from its local secrets.yaml file.
+# supplies credential substitutions from its local secrets.yaml file.
 substitutions:
-  firmware_version: "19"
+  firmware_version: "20"
 
   # Default ESP32 GPIOs for the low-voltage side of the Wiegand level shifter.
   # Physical wiring:
   #   Keypad Green D0 -> HV3/LV3 -> GPIO22
   #   Keypad White D1 -> HV2/LV2 -> GPIO19
-  # These can be overridden from the local Device Builder wrapper without
-  # modifying this remote package.
   garage_keypad_d0_pin: "GPIO22"
   garage_keypad_d1_pin: "GPIO19"
 
   # Home Assistant cover controlled by the keypad. A standalone '*' or '#'
   # may CLOSE this cover only when Home Assistant reports it exactly open.
-  # This substitution can be overridden by the local Device Builder wrapper.
   garage_door_entity_id: "cover.ratgdov25i_15cde7_door"
 
-  # SECURITY: Leave false in production. When true, completed PIN HMAC
-  # verifiers (never plaintext PINs) are written to the ESPHome log for bench
-  # testing. The plaintext PIN is never intentionally logged or published.
-  keypad_debug_logging: "false"
+  # Lock Code Manager is the canonical PIN database. Use the stable config-entry
+  # ID rather than the display title so renaming the LCM entry cannot break the
+  # keypad. Override this in the local Device Builder wrapper if the entry is
+  # ever recreated.
+  lock_code_manager_entry_id: "01M1B0469B76V0TSN5FBPDYHJC"
+
+  # Attribution-only entity ID reported to Lock Code Manager as the credential
+  # source. This entity is not used to carry the PIN; the PIN is sent only as
+  # action data over ESPHome's encrypted native API.
+  garage_keypad_source_entity_id: "binary_sensor.garage_garage_keypad_debug_mode"
+
+  # SECURITY/SAFETY: Leave false in production. Home Assistant's guarded garage
+  # script refuses to operate the garage whenever this reports true. This is
+  # deliberately independent of credential logging; PINs are never logged.
+  keypad_debug_mode: "false"
 
 esphome:
   name: garage-keypad
   friendly_name: Garage Keypad
 
-  # Log an explicit firmware version and readiness marker after ESPHome's
-  # components have completed initialization. These are also repeated after an
-  # API client connects so remote log viewers reliably see them.
   on_boot:
     - priority: -100
       then:
         - lambda: |-
             ESP_LOGI("startup", "Firmware version: %s", ESPHOME_PROJECT_VERSION);
             ESP_LOGI("startup", "ready");
-
-  # ESP-IDF eFuse/RNG APIs used for one-time BLK3 HMAC-key provisioning, plus
-  # Mbed TLS for software HMAC-SHA256 using the readable BLK3 key.
-  # Angle-bracket includes are emitted directly into ESPHome's generated
-  # main.cpp, so they also work when this YAML is consumed as a remote package.
-  includes:
-    - <esp_efuse.h>
-    - <esp_random.h>
-    - <esp_err.h>
-    - <mbedtls/md.h>
 
   project:
     name: "citizenracer.garage_keypad"
@@ -62,135 +57,13 @@ esp32:
 
 logger:
 
-# Home Assistant communicates with the device over ESPHome's encrypted
-# native API. The Noise PSK is supplied by the local Device Builder wrapper.
-#
-# Track Home Assistant connections by the API client's reported name rather
-# than by generic API connection state. API client identity is also logged on
-# connect/disconnect to make connection-state debugging unambiguous.
+# Home Assistant communicates with the device over ESPHome's encrypted native
+# API. The Noise PSK is supplied by the local Device Builder wrapper.
 api:
   encryption:
     key: "${garage_keypad_api_encryption_key}"
 
-  # Administrative PIN-to-HMAC generator. This exists so authorized PINs can
-  # be added to the Home Assistant verifier map without exporting the BLK3 key.
-  # The input is a string so leading zeroes are preserved exactly.
-  actions:
-    - action: generate_pin_hmac
-      variables:
-        pin: string
-      supports_response: only
-      then:
-        - api.respond:
-            data: !lambda |-
-              constexpr size_t KEY_BYTES = 32;
-              constexpr size_t KEY_BITS = KEY_BYTES * 8;
-              constexpr size_t DIGEST_BYTES = 32;
-              static constexpr char HEX[] = "0123456789abcdef";
-
-              root["algorithm"] = "HMAC-SHA256";
-
-              if (pin.size() < 4 || pin.size() > 8) {
-                root["success"] = false;
-                root["error"] = "PIN must contain 4-8 digits";
-                return;
-              }
-
-              for (const char c : pin) {
-                if (c < '0' || c > '9') {
-                  root["success"] = false;
-                  root["error"] = "PIN must contain digits only";
-                  return;
-                }
-              }
-
-              if (esp_efuse_get_coding_scheme(EFUSE_BLK3) !=
-                  EFUSE_CODING_SCHEME_NONE) {
-                root["success"] = false;
-                root["error"] = "BLK3 is not configured as a 256-bit uncoded block";
-                return;
-              }
-
-              if (esp_efuse_get_key_dis_read(EFUSE_BLK3)) {
-                root["success"] = false;
-                root["error"] = "BLK3 is read-protected";
-                return;
-              }
-
-              if (!esp_efuse_get_key_dis_write(EFUSE_BLK3)) {
-                root["success"] = false;
-                root["error"] = "BLK3 HMAC key is not write-protected";
-                return;
-              }
-
-              uint8_t key[KEY_BYTES] = {};
-              const auto wipe = [](uint8_t *buffer, size_t length) {
-                volatile uint8_t *p = buffer;
-                while (length-- > 0) {
-                  *p++ = 0;
-                }
-              };
-
-              esp_err_t err = esp_efuse_read_block(
-                  EFUSE_BLK3, key, 0, KEY_BITS);
-              if (err != ESP_OK) {
-                wipe(key, sizeof(key));
-                root["success"] = false;
-                root["error"] = "Unable to read BLK3 HMAC key";
-                return;
-              }
-
-              uint8_t key_or = 0;
-              for (size_t i = 0; i < KEY_BYTES; i++) {
-                key_or |= key[i];
-              }
-              if (key_or == 0) {
-                wipe(key, sizeof(key));
-                root["success"] = false;
-                root["error"] = "BLK3 HMAC key is empty";
-                return;
-              }
-
-              const mbedtls_md_info_t *md_info =
-                  mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
-              if (md_info == nullptr) {
-                wipe(key, sizeof(key));
-                root["success"] = false;
-                root["error"] = "SHA-256 is unavailable";
-                return;
-              }
-
-              uint8_t digest[DIGEST_BYTES] = {};
-              const int hmac_result = mbedtls_md_hmac(
-                  md_info,
-                  key,
-                  sizeof(key),
-                  pin.byte(),
-                  pin.size(),
-                  digest);
-              wipe(key, sizeof(key));
-
-              if (hmac_result != 0) {
-                wipe(digest, sizeof(digest));
-                root["success"] = false;
-                root["error"] = "HMAC-SHA256 calculation failed";
-                return;
-              }
-
-              char hex[DIGEST_BYTES * 2 + 1] = {};
-              for (size_t i = 0; i < DIGEST_BYTES; i++) {
-                hex[i * 2] = HEX[(digest[i] >> 4) & 0x0F];
-                hex[i * 2 + 1] = HEX[digest[i] & 0x0F];
-              }
-              hex[DIGEST_BYTES * 2] = '\0';
-              wipe(digest, sizeof(digest));
-
-              id(generated_pin_hmac).publish_state(hex);
-              root["success"] = true;
-              root["hmac"] = hex;
-
   on_client_connected:
-    # Update the LED state immediately.
     - if:
         condition:
           lambda: |-
@@ -200,9 +73,6 @@ api:
               if (id(home_assistant_api_connections) < 255) {
                 id(home_assistant_api_connections) += 1;
               }
-    # A newly connected log viewer is not yet subscribed at the instant this
-    # callback fires. Delay diagnostic messages so the remote log stream has
-    # time to become active and can receive them.
     - delay: 3s
     - lambda: |-
         ESP_LOGI("startup", "Firmware version: %s", ESPHOME_PROJECT_VERSION);
@@ -210,55 +80,7 @@ api:
         ESP_LOGI("api_client", "Connected: client_info='%s' address='%s'",
                  client_info.c_str(), client_address.c_str());
 
-        constexpr size_t KEY_BYTES = 32;
-        constexpr size_t KEY_BITS = KEY_BYTES * 8;
-        const esp_efuse_coding_scheme_t scheme =
-            esp_efuse_get_coding_scheme(EFUSE_BLK3);
-        const bool read_protected = esp_efuse_get_key_dis_read(EFUSE_BLK3);
-        const bool write_protected = esp_efuse_get_key_dis_write(EFUSE_BLK3);
-
-        if (scheme != EFUSE_CODING_SCHEME_NONE) {
-          ESP_LOGW("hmac_status",
-                   "BLK3 status: coding scheme=%d; expected 256-bit NONE",
-                   static_cast<int>(scheme));
-        } else if (read_protected) {
-          ESP_LOGW("hmac_status",
-                   "BLK3 status: read-protected; HMAC key material cannot be inspected by firmware");
-        } else {
-          uint8_t block[KEY_BYTES] = {};
-          const esp_err_t err =
-              esp_efuse_read_block(EFUSE_BLK3, block, 0, KEY_BITS);
-          if (err != ESP_OK) {
-            ESP_LOGE("hmac_status", "BLK3 status read failed: %s",
-                     esp_err_to_name(err));
-          } else {
-            uint8_t block_or = 0;
-            for (size_t i = 0; i < KEY_BYTES; i++) {
-              block_or |= block[i];
-            }
-
-            volatile uint8_t *wipe = block;
-            for (size_t i = 0; i < KEY_BYTES; i++) {
-              wipe[i] = 0;
-            }
-
-            if (block_or != 0 && write_protected) {
-              ESP_LOGI("hmac_status",
-                       "HMAC key already provisioned; BLK3 is write-protected and readable");
-            } else if (block_or != 0) {
-              ESP_LOGW("hmac_status",
-                       "BLK3 status: non-empty but NOT write-protected");
-            } else if (write_protected) {
-              ESP_LOGE("hmac_status",
-                       "BLK3 status: empty and write-protected; key cannot be provisioned");
-            } else {
-              ESP_LOGW("hmac_status",
-                       "BLK3 status: empty and writable; HMAC key has not been provisioned");
-            }
-          }
-        }
   on_client_disconnected:
-    # Update the LED state immediately.
     - if:
         condition:
           lambda: |-
@@ -281,164 +103,13 @@ wifi:
   ssid: "${wifi_ssid}"
   password: "${wifi_password}"
 
-  # Provision the device-unique HMAC key only after Wi-Fi has connected. On
-  # classic ESP32, the active Wi-Fi RF subsystem supplies true entropy to the
-  # hardware RNG used by esp_fill_random().
-  #
-  # Safety rules:
-  #   * make at most one provisioning attempt per boot;
-  #   * require the normal 256-bit/uncoded eFuse coding scheme;
-  #   * refuse to proceed if BLK3 is read- or write-protected;
-  #   * refuse to touch BLK3 if any bit is already programmed;
-  #   * never log the generated key;
-  #   * verify the burn before permanently write-protecting BLK3;
-  #   * deliberately leave BLK3 readable so firmware can use the HMAC key.
-  on_connect:
-    - lambda: |-
-        static bool provisioning_attempted = false;
-        constexpr const char *TAG = "hmac_provision";
-        constexpr size_t KEY_BYTES = 32;
-        constexpr size_t KEY_BITS = KEY_BYTES * 8;
-
-        if (provisioning_attempted) {
-          return;
-        }
-        provisioning_attempted = true;
-
-        const auto wipe = [](uint8_t *buffer, size_t length) {
-          volatile uint8_t *p = buffer;
-          while (length-- > 0) {
-            *p++ = 0;
-          }
-        };
-
-        const esp_efuse_coding_scheme_t scheme =
-            esp_efuse_get_coding_scheme(EFUSE_BLK3);
-        if (scheme != EFUSE_CODING_SCHEME_NONE) {
-          ESP_LOGE(TAG,
-                   "Refusing HMAC-key provisioning: BLK3 coding scheme is %d, not 256-bit NONE",
-                   static_cast<int>(scheme));
-          return;
-        }
-
-        if (esp_efuse_get_key_dis_read(EFUSE_BLK3)) {
-          ESP_LOGE(TAG,
-                   "Refusing HMAC-key provisioning: BLK3 is read-protected");
-          return;
-        }
-
-        const bool already_write_protected =
-            esp_efuse_get_key_dis_write(EFUSE_BLK3);
-
-        uint8_t existing[KEY_BYTES] = {};
-        esp_err_t err =
-            esp_efuse_read_block(EFUSE_BLK3, existing, 0, KEY_BITS);
-        if (err != ESP_OK) {
-          ESP_LOGE(TAG, "Unable to read BLK3: %s", esp_err_to_name(err));
-          wipe(existing, sizeof(existing));
-          return;
-        }
-
-        uint8_t existing_or = 0;
-        for (size_t i = 0; i < KEY_BYTES; i++) {
-          existing_or |= existing[i];
-        }
-        wipe(existing, sizeof(existing));
-
-        if (existing_or != 0) {
-          if (already_write_protected) {
-            ESP_LOGI(TAG,
-                     "HMAC key already provisioned; BLK3 is write-protected and readable");
-          } else {
-            ESP_LOGE(TAG,
-                     "BLK3 already contains data but is not write-protected; refusing to modify it");
-          }
-          return;
-        }
-
-        if (already_write_protected) {
-          ESP_LOGE(TAG,
-                   "BLK3 is empty but already write-protected; HMAC key cannot be provisioned");
-          return;
-        }
-
-        uint8_t key[KEY_BYTES] = {};
-        esp_fill_random(key, sizeof(key));
-
-        uint8_t random_or = 0;
-        for (size_t i = 0; i < KEY_BYTES; i++) {
-          random_or |= key[i];
-        }
-        if (random_or == 0) {
-          ESP_LOGE(TAG,
-                   "Hardware RNG unexpectedly returned an all-zero key; refusing to burn BLK3");
-          wipe(key, sizeof(key));
-          return;
-        }
-
-        ESP_LOGI(TAG,
-                 "BLK3 is empty; generated a 256-bit HMAC key from the hardware RNG");
-
-        err = esp_efuse_write_block(EFUSE_BLK3, key, 0, KEY_BITS);
-        if (err != ESP_OK) {
-          ESP_LOGE(TAG, "Failed to burn HMAC key into BLK3: %s",
-                   esp_err_to_name(err));
-          wipe(key, sizeof(key));
-          return;
-        }
-
-        uint8_t verify[KEY_BYTES] = {};
-        err = esp_efuse_read_block(EFUSE_BLK3, verify, 0, KEY_BITS);
-        if (err != ESP_OK) {
-          ESP_LOGE(TAG,
-                   "HMAC key was burned, but BLK3 could not be read back for verification: %s",
-                   esp_err_to_name(err));
-          wipe(key, sizeof(key));
-          wipe(verify, sizeof(verify));
-          return;
-        }
-
-        uint8_t difference = 0;
-        for (size_t i = 0; i < KEY_BYTES; i++) {
-          difference |= key[i] ^ verify[i];
-        }
-        wipe(key, sizeof(key));
-        wipe(verify, sizeof(verify));
-
-        if (difference != 0) {
-          ESP_LOGE(TAG,
-                   "BLK3 verification FAILED; refusing to write-protect the block");
-          return;
-        }
-
-        ESP_LOGI(TAG, "BLK3 HMAC key burn verified successfully");
-
-        err = esp_efuse_set_write_protect(EFUSE_BLK3);
-        if (err != ESP_OK) {
-          ESP_LOGE(TAG,
-                   "HMAC key is present, but permanent BLK3 write protection failed: %s",
-                   esp_err_to_name(err));
-          return;
-        }
-
-        if (!esp_efuse_get_key_dis_write(EFUSE_BLK3)) {
-          ESP_LOGE(TAG,
-                   "HMAC key is present, but BLK3 write protection did not verify");
-          return;
-        }
-
-        ESP_LOGI(TAG,
-                 "BLK3 HMAC key provisioned, verified, and permanently write-protected");
-
   ap:
     ssid: "Garage-Keypad-Fallback"
     password: "${fallback_ap_password}"
 
 captive_portal:
 
-# Enter a minimal recovery environment after repeated failed boots. In safe
-# mode ESPHome leaves networking, logging, and OTA available so a bad firmware
-# update can normally be repaired wirelessly.
+# Enter a minimal recovery environment after repeated failed boots.
 safe_mode:
   num_attempts: 5
   boot_is_good_after: 1min
@@ -447,24 +118,13 @@ safe_mode:
 # ---------------------------------------------------------------------------
 # Garage keypad - Wiegand input and PIN/RFID processing
 # ---------------------------------------------------------------------------
-#
-# Connect the LOW-VOLTAGE / 3.3 V side of the level shifter as follows:
-#   Green D0: HV3 -> LV3 -> ${garage_keypad_d0_pin}
-#   White D1: HV2 -> LV2 -> ${garage_keypad_d1_pin}
-#
-# The pin substitutions default to GPIO22/GPIO19 but can be overridden in the
-# local Device Builder wrapper if the physical wiring changes.
 wiegand:
   - id: garage_keypad_wiegand
     d0: "${garage_keypad_d0_pin}"
     d1: "${garage_keypad_d1_pin}"
 
-    # Wiegand keypad keys 10 and 11 are '*' and '#'. Track whether any numeric
-    # PIN digits precede them so the normal PIN collector semantics remain
-    # unchanged. A truly standalone '*' or '#' is a CLOSE-ONLY shortcut: it
-    # requests cover.close_cover only if Home Assistant currently reports the
-    # garage door exactly open. It never calls the guarded open/credential API,
-    # never disarms the alarm, and can never issue an open command.
+    # Wiegand keypad keys 10 and 11 are '*' and '#'. A truly standalone '*' or
+    # '#' is a CLOSE-ONLY shortcut. It can never issue an open command.
     on_key:
       - if:
           condition:
@@ -497,105 +157,17 @@ wiegand:
                   - lambda: |-
                       id(keypad_pin_entry_active) = false;
 
-    # ESPHome decodes and parity-checks 26-, 34-, and 37-bit Wiegand tags
-    # before firing on_tag. Keep decoded-tag logging enabled while RFID support
-    # is being commissioned, then HMAC the decoded credential before sending it
-    # to Home Assistant. The plaintext RFID credential is never sent over the
-    # Home Assistant action call.
+    # ESPHome decodes/parity-checks 26-, 34-, and 37-bit Wiegand RFID frames.
+    # RFID authorization is intentionally disabled in v20. Lock Code Manager's
+    # external-credential path currently manages PINs; do not disguise RFID IDs
+    # as PINs. Keep diagnostics so RFID can be migrated cleanly when LCM supports
+    # the credential type end to end.
     on_tag:
       - lambda: |-
-          ESP_LOGI("rfid", "RFID tag received: %s", x.c_str());
-
-      - homeassistant.action:
-          action: script.garage_keypad_validate_rfid_hmac
-          data:
-            hmac: !lambda |-
-              constexpr size_t KEY_BYTES = 32;
-              constexpr size_t KEY_BITS = KEY_BYTES * 8;
-              constexpr size_t DIGEST_BYTES = 32;
-              static constexpr char HEX[] = "0123456789abcdef";
-
-              const auto wipe = [](uint8_t *buffer, size_t length) {
-                volatile uint8_t *p = buffer;
-                while (length-- > 0) {
-                  *p++ = 0;
-                }
-              };
-
-              if (esp_efuse_get_coding_scheme(EFUSE_BLK3) !=
-                  EFUSE_CODING_SCHEME_NONE) {
-                ESP_LOGE("rfid_hmac", "Cannot validate RFID: BLK3 coding scheme is not 256-bit NONE");
-                return std::string("");
-              }
-
-              if (esp_efuse_get_key_dis_read(EFUSE_BLK3)) {
-                ESP_LOGE("rfid_hmac", "Cannot validate RFID: BLK3 is read-protected");
-                return std::string("");
-              }
-
-              if (!esp_efuse_get_key_dis_write(EFUSE_BLK3)) {
-                ESP_LOGE("rfid_hmac", "Cannot validate RFID: BLK3 key is not write-protected");
-                return std::string("");
-              }
-
-              uint8_t key[KEY_BYTES] = {};
-              esp_err_t err = esp_efuse_read_block(
-                  EFUSE_BLK3, key, 0, KEY_BITS);
-              if (err != ESP_OK) {
-                wipe(key, sizeof(key));
-                ESP_LOGE("rfid_hmac", "Cannot validate RFID: unable to read BLK3: %s",
-                         esp_err_to_name(err));
-                return std::string("");
-              }
-
-              uint8_t key_or = 0;
-              for (size_t i = 0; i < KEY_BYTES; i++) {
-                key_or |= key[i];
-              }
-              if (key_or == 0) {
-                wipe(key, sizeof(key));
-                ESP_LOGE("rfid_hmac", "Cannot validate RFID: BLK3 key is empty");
-                return std::string("");
-              }
-
-              const mbedtls_md_info_t *md_info =
-                  mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
-              if (md_info == nullptr) {
-                wipe(key, sizeof(key));
-                ESP_LOGE("rfid_hmac", "Cannot validate RFID: SHA-256 is unavailable");
-                return std::string("");
-              }
-
-              uint8_t digest[DIGEST_BYTES] = {};
-              const int hmac_result = mbedtls_md_hmac(
-                  md_info,
-                  key,
-                  sizeof(key),
-                  reinterpret_cast<const unsigned char *>(x.data()),
-                  x.size(),
-                  digest);
-              wipe(key, sizeof(key));
-
-              if (hmac_result != 0) {
-                wipe(digest, sizeof(digest));
-                ESP_LOGE("rfid_hmac", "Cannot validate RFID: HMAC-SHA256 calculation failed (%d)",
-                         hmac_result);
-                return std::string("");
-              }
-
-              char hex[DIGEST_BYTES * 2 + 1] = {};
-              for (size_t i = 0; i < DIGEST_BYTES; i++) {
-                hex[i * 2] = HEX[(digest[i] >> 4) & 0x0F];
-                hex[i * 2 + 1] = HEX[digest[i] & 0x0F];
-              }
-              hex[DIGEST_BYTES * 2] = '\0';
-              wipe(digest, sizeof(digest));
-
-              return std::string(hex);
+          ESP_LOGI("rfid", "RFID tag received: %s (authorization disabled)", x.c_str());
 
     # on_raw also sees keypad key frames. Never log 4- or 8-bit frames because
     # they encode individual keypad keystrokes and could disclose PIN digits.
-    # RFID/raw frames remain logged during commissioning as requested.
     on_raw:
       - lambda: |-
           if (bits > 8) {
@@ -606,12 +178,12 @@ wiegand:
           }
 
 # Collect 4-8 numeric digits. '#' submits the PIN, '*' clears the current
-# entry, and an incomplete entry is discarded after ten seconds. A standalone
-# '*' or '#' is handled separately by the Wiegand on_key close-only shortcut.
+# entry, and an incomplete entry is discarded after ten seconds.
 #
-# The plaintext PIN exists only transiently in the ESP32 key collector. On
-# submission, the ESP32 computes HMAC-SHA256(BLK3 key, PIN), wipes temporary
-# key/digest buffers, and sends only the 64-character verifier to Home Assistant.
+# Lock Code Manager is the sole PIN database. The plaintext PIN exists only in
+# the transient ESPHome key collector and in the encrypted native-API action
+# request to lock_code_manager.use_credential. It is never published as an
+# entity state or intentionally written to a log.
 key_collector:
   - id: garage_keypad_pin
     source_id: garage_keypad_wiegand
@@ -626,113 +198,62 @@ key_collector:
     on_result:
       - lambda: |-
           id(keypad_pin_entry_active) = false;
-          ESP_LOGI("keypad", "PIN entered (%u digits); generating HMAC verifier",
+          ESP_LOGI("keypad", "PIN entered (%u digits); validating with Lock Code Manager",
                    static_cast<unsigned>(x.size()));
 
-      # Compute HMAC locally and send only the verifier to Home Assistant.
-      # Any HMAC/key failure returns an empty verifier, which the HA script
-      # rejects because valid verifiers are exactly 64 hexadecimal characters.
       - homeassistant.action:
-          action: script.garage_keypad_validate_hmac
+          action: lock_code_manager.use_credential
           data:
-            hmac: !lambda |-
-              constexpr size_t KEY_BYTES = 32;
-              constexpr size_t KEY_BITS = KEY_BYTES * 8;
-              constexpr size_t DIGEST_BYTES = 32;
-              static constexpr char HEX[] = "0123456789abcdef";
-
-              const auto wipe = [](uint8_t *buffer, size_t length) {
-                volatile uint8_t *p = buffer;
-                while (length-- > 0) {
-                  *p++ = 0;
-                }
-              };
-
-              if (esp_efuse_get_coding_scheme(EFUSE_BLK3) !=
-                  EFUSE_CODING_SCHEME_NONE) {
-                ESP_LOGE("keypad_hmac", "Cannot validate PIN: BLK3 coding scheme is not 256-bit NONE");
-                return std::string("");
-              }
-
-              if (esp_efuse_get_key_dis_read(EFUSE_BLK3)) {
-                ESP_LOGE("keypad_hmac", "Cannot validate PIN: BLK3 is read-protected");
-                return std::string("");
-              }
-
-              if (!esp_efuse_get_key_dis_write(EFUSE_BLK3)) {
-                ESP_LOGE("keypad_hmac", "Cannot validate PIN: BLK3 key is not write-protected");
-                return std::string("");
-              }
-
-              uint8_t key[KEY_BYTES] = {};
-              esp_err_t err = esp_efuse_read_block(
-                  EFUSE_BLK3, key, 0, KEY_BITS);
-              if (err != ESP_OK) {
-                wipe(key, sizeof(key));
-                ESP_LOGE("keypad_hmac", "Cannot validate PIN: unable to read BLK3: %s",
-                         esp_err_to_name(err));
-                return std::string("");
-              }
-
-              uint8_t key_or = 0;
-              for (size_t i = 0; i < KEY_BYTES; i++) {
-                key_or |= key[i];
-              }
-              if (key_or == 0) {
-                wipe(key, sizeof(key));
-                ESP_LOGE("keypad_hmac", "Cannot validate PIN: BLK3 key is empty");
-                return std::string("");
-              }
-
-              const mbedtls_md_info_t *md_info =
-                  mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
-              if (md_info == nullptr) {
-                wipe(key, sizeof(key));
-                ESP_LOGE("keypad_hmac", "Cannot validate PIN: SHA-256 is unavailable");
-                return std::string("");
-              }
-
-              uint8_t digest[DIGEST_BYTES] = {};
-              const int hmac_result = mbedtls_md_hmac(
-                  md_info,
-                  key,
-                  sizeof(key),
-                  reinterpret_cast<const unsigned char *>(x.data()),
-                  x.size(),
-                  digest);
-              wipe(key, sizeof(key));
-
-              if (hmac_result != 0) {
-                wipe(digest, sizeof(digest));
-                ESP_LOGE("keypad_hmac", "Cannot validate PIN: HMAC-SHA256 calculation failed (%d)",
-                         hmac_result);
-                return std::string("");
-              }
-
-              char hex[DIGEST_BYTES * 2 + 1] = {};
-              for (size_t i = 0; i < DIGEST_BYTES; i++) {
-                hex[i * 2] = HEX[(digest[i] >> 4) & 0x0F];
-                hex[i * 2 + 1] = HEX[digest[i] & 0x0F];
-              }
-              hex[DIGEST_BYTES * 2] = '\0';
-              wipe(digest, sizeof(digest));
-
-              if (strcmp("${keypad_debug_logging}", "true") == 0) {
-                ESP_LOGW("keypad", "DEBUG MODE - PIN HMAC: [%s]", hex);
-              }
-
-              return std::string(hex);
+            config_entry_id: "${lock_code_manager_entry_id}"
+            code: !lambda |-
+              return x;
+            source: "${garage_keypad_source_entity_id}"
+            target: "${garage_door_entity_id}"
+          capture_response: true
+          on_success:
+            - if:
+                condition:
+                  lambda: |-
+                    JsonVariantConst wrapped = response["response"];
+                    if (!wrapped.is<JsonObjectConst>()) {
+                      ESP_LOGE("keypad", "Lock Code Manager returned an unexpected response shape");
+                      return false;
+                    }
+                    JsonObjectConst check = wrapped.as<JsonObjectConst>();
+                    return check["valid"] | false;
+                then:
+                  - lambda: |-
+                      JsonObjectConst check = response["response"].as<JsonObjectConst>();
+                      const char *user = check["user"] | "";
+                      ESP_LOGI("keypad", "Credential accepted by Lock Code Manager for user '%s'", user);
+                  - homeassistant.action:
+                      action: script.garage_keypad_open_garage
+                      data:
+                        person_name: !lambda |-
+                          JsonObjectConst check = response["response"].as<JsonObjectConst>();
+                          const char *user = check["user"] | "";
+                          return std::string(user);
+                else:
+                  - lambda: |-
+                      JsonVariantConst wrapped = response["response"];
+                      if (!wrapped.is<JsonObjectConst>()) {
+                        return;
+                      }
+                      JsonObjectConst check = wrapped.as<JsonObjectConst>();
+                      const char *reason = check["reason"] | "unknown";
+                      ESP_LOGW("keypad", "Credential rejected by Lock Code Manager: %s", reason);
+          on_error:
+            - logger.log:
+                tag: keypad
+                level: ERROR
+                format: "Lock Code Manager credential validation action failed; refusing garage operation"
 
     on_timeout:
       - lambda: |-
           id(keypad_pin_entry_active) = false;
           ESP_LOGI("keypad", "PIN entry timed out");
 
-# The onboard blue LED on this 30-pin ESP32-WROOM-32 board is connected to
-# GPIO2. GPIO2 is a boot strapping pin, but the board already uses it for the
-# onboard LED and we do not attach external pull-up/down hardware to it. The
-# warning is therefore intentionally suppressed while retaining normal GPIO2
-# behavior after boot.
+# Onboard blue LED on this 30-pin ESP32-WROOM-32 board is GPIO2.
 output:
   - platform: gpio
     pin:
@@ -748,22 +269,16 @@ light:
     restore_mode: ALWAYS_OFF
 
 globals:
-  # Tracks whether numeric PIN digits have been entered since the most recent
-  # submit/clear/timeout. This distinguishes a standalone '*' or '#' from the
-  # same keys used as part of normal PIN entry.
   - id: keypad_pin_entry_active
     type: bool
     restore_value: no
     initial_value: 'false'
 
-  # Current position within the LED blink pattern.
   - id: blue_status_phase
     type: uint8_t
     restore_value: no
     initial_value: '0'
 
-  # Number of native API clients whose reported name begins with
-  # "Home Assistant ". Logger-only clients do not affect this value.
   - id: home_assistant_api_connections
     type: uint8_t
     restore_value: no
@@ -773,9 +288,6 @@ globals:
 #   Regular blink:        Wi-Fi is disconnected / searching.
 #   Double blink + pause: Wi-Fi is connected, but Home Assistant is not.
 #   Solid:                Home Assistant is connected to the encrypted API.
-#
-# The 250 ms scheduler gives a 500 ms on/off Wi-Fi-search blink and a
-# 250 ms ON, 250 ms OFF, 250 ms ON, 1 second OFF double-blink pattern.
 interval:
   - interval: 250ms
     then:
@@ -792,7 +304,6 @@ interval:
                 condition:
                   wifi.connected:
                 then:
-                  # Double blink followed by a one-second pause.
                   - if:
                       condition:
                         lambda: |-
@@ -806,7 +317,6 @@ interval:
                       id(blue_status_phase) =
                           (id(blue_status_phase) + 1) % 7;
                 else:
-                  # Regular 500 ms on / 500 ms off blink while looking for Wi-Fi.
                   - if:
                       condition:
                         lambda: |-
@@ -819,10 +329,7 @@ interval:
                       id(blue_status_phase) =
                           (id(blue_status_phase) + 1) % 4;
 
-# Expose Home Assistant connection state and the compile-time keypad debug mode
-# as diagnostic entities. Home Assistant uses Debug Mode as a fail-closed safety
-# gate: the garage-opening API may proceed only when this entity positively
-# reports off.
+# Expose Home Assistant connection state and a dedicated debug-mode safety gate.
 binary_sensor:
   - platform: template
     name: "Home Assistant Connected"
@@ -838,7 +345,7 @@ binary_sensor:
     icon: "mdi:bug"
     entity_category: diagnostic
     lambda: |-
-      return strcmp("${keypad_debug_logging}", "true") == 0;
+      return strcmp("${keypad_debug_mode}", "true") == 0;
 
 sensor:
   - platform: wifi_signal
@@ -849,34 +356,19 @@ sensor:
     name: "Uptime"
     type: seconds
 
-  # Internal ESP32 silicon temperature. This is a die-temperature diagnostic,
-  # not an ambient-temperature measurement for the project enclosure.
   - platform: internal_temperature
     name: "ESP32 Temperature"
     entity_category: diagnostic
     update_interval: 60s
 
 text_sensor:
-  # Import the Home Assistant cover state so the standalone close shortcut can
-  # fail closed. Unknown/unavailable/uninitialized states do nothing; only the
-  # exact state "open" allows a close request to be sent.
+  # Fail closed for the standalone close shortcut: only exact state "open"
+  # permits the close request.
   - platform: homeassistant
     id: garage_door_state
     entity_id: "${garage_door_entity_id}"
     internal: true
 
-  # Last HMAC generated by the administrative generate_pin_hmac API action.
-  # This is a verifier value, not the secret BLK3 HMAC key, and normal keypad
-  # submissions do not publish their verifier to this entity.
-  - platform: template
-    name: "Generated PIN HMAC"
-    id: generated_pin_hmac
-    icon: "mdi:key-chain-variant"
-    entity_category: diagnostic
-    update_interval: never
-
-  # Expose this file's explicit firmware version to Home Assistant. ESPHome's
-  # project version is also included in the native API device_info response.
   - platform: template
     name: "Firmware Version"
     id: firmware_version_text
