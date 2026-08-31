@@ -4,11 +4,13 @@ ESPHome firmware and Home Assistant configuration for a classic ESP32-based gara
 
 The controller is an **ESP32S 30-pin USB-C NodeMCU development board with ESP32-WROOM-32 and CP2102**. The active outdoor reader/keypad is a **Retekess T-AC04** using Wiegand output.
 
-## Current production release
+## Release status
 
-**Firmware v20 is merged to `main`, deployed to the production keypad, and validated end to end.**
+The repository firmware on `main` is **v21**. The last confirmed production deployment is **v20**; v20 completed the Lock Code Manager migration and was validated end to end on the physical keypad.
 
-v20 replaced the project's custom HMAC credential system with **Lock Code Manager (LCM)** external credential validation. The production PIN path is:
+v21 is a small follow-up to that architecture: when Lock Code Manager rejects a PIN, firmware now writes a Home Assistant Activity/Logbook entry containing the **LCM rejection reason** while never including the PIN itself. Invalid credentials still stop before the guarded garage-operation script.
+
+The PIN path is:
 
 ```text
 Retekess T-AC04 PIN
@@ -26,21 +28,20 @@ lock_code_manager.use_credential
    |
    +--> valid: script.garage_keypad_open_garage(person_name=<LCM user>)
    |
-   +--> invalid: stop; no garage action
+   +--> invalid: Activity entry with LCM reason; no garage action
 ```
 
-Production validation completed successfully:
+The v20 production cutover established that valid physical PINs resolve to the correct LCM users, invalid PINs are rejected, PIN values do not appear in ESPHome logs, Debug Mode blocks opening during no-motion testing, and the production guarded path opens the garage after Debug Mode is intentionally disabled.
 
-- v20 booted and reported firmware version `20`;
-- with Debug Mode on, physical keypad submissions reached LCM and valid credentials resolved to the correct users;
-- invalid credentials were rejected with `unknown_code` and did not reach the garage action;
-- ESPHome logs showed only PIN length and validation outcome, not PIN values;
-- while Debug Mode was on, accepted credentials did not move the garage;
-- after redeploying v20 with Debug Mode off, a valid physical keypad PIN successfully opened the garage through the guarded Home Assistant script.
+## Required runtime dependency
 
-Lock Code Manager is now the canonical source for keypad users and PINs. Adding, removing, enabling, disabling, or scheduling a keypad user should be done in LCM rather than by editing a YAML credential map.
+This project has a direct runtime dependency on **[Lock Code Manager](https://github.com/raman325/lock_code_manager)**, a Home Assistant custom integration. Use **LCM 5.3.0 or later**.
 
-The old Home Assistant HMAC validators and credential file are no longer part of the production path. They may remain temporarily on the live Home Assistant installation solely as rollback material until cleanup is complete; they are not required by v20.
+Lock Code Manager is the canonical source for keypad users and PINs. Adding, removing, enabling, disabling, or scheduling a keypad user should be done in LCM rather than by editing a YAML credential map.
+
+The ESPHome package cannot install or enforce the presence of a Home Assistant custom integration. If LCM is missing, unavailable, or its action call fails, credential validation fails closed and firmware refuses garage operation.
+
+For GitHub tooling, `.github/workflows/dependency-submission.yml` submits `raman325/lock_code_manager` as a **direct runtime dependency** to GitHub's Dependency Graph. This makes the relationship machine-readable in **Insights → Dependency graph** even though ESPHome YAML has no native manifest field for Home Assistant integration dependencies.
 
 ## Current access-control contract
 
@@ -83,35 +84,41 @@ source          = Garage Keypad attribution entity
 target          = cover.ratgdov25i_15cde7_door
 ```
 
-LCM returns `valid`, `user`, and `reason`. Invalid credentials stop in the firmware. Valid credentials call `script.garage_keypad_open_garage` with LCM's friendly user name.
+LCM returns `valid`, `user`, and `reason`.
+
+- `valid: true` -> firmware passes the returned friendly user name to `script.garage_keypad_open_garage`.
+- `valid: false` -> firmware does not call the garage script. In v21 it logs a Home Assistant Activity entry such as `Credential rejected - Lock Code Manager reason: unknown_code`.
+- action/response failure -> firmware fails closed and refuses garage operation.
+
+No Activity entry contains the submitted PIN.
 
 Enable **Allow the device to perform Home Assistant actions** for the Garage Keypad ESPHome integration entry. ESPHome and Home Assistant 2025.11.0 or later are required for reliable action-response capture.
 
 ## Debug Mode
 
-v20 keeps Debug Mode as an independent physical-operation safety control:
+v21 retains Debug Mode as an independent physical-operation safety control:
 
 ```yaml
 keypad_debug_mode: "false"
 ```
 
-The production setting is `false`. Set it to `true` only for an intentional no-motion/maintenance test and redeploy the firmware. The Home Assistant opening path fails closed unless `binary_sensor.garage_garage_keypad_debug_mode` positively reports `off`.
+The normal production setting is `false`. Set it to `true` only for an intentional no-motion/maintenance test and redeploy the firmware. The Home Assistant opening path fails closed unless `binary_sensor.garage_garage_keypad_debug_mode` positively reports `off`.
 
 Debug Mode has nothing to do with credential logging. PINs are never intentionally logged in either mode. Debug Mode blocks opening but does not block closing an already-open garage.
 
 ## PIN confidentiality
 
-There is no PIN HMAC, verifier map, HMAC generator, eFuse-key dependency, PIN sensor, or custom PIN-validation script in the v20 firmware path.
+There is no PIN HMAC, verifier map, HMAC generator, eFuse-key dependency, PIN sensor, or custom PIN-validation script in the v20/v21 firmware path.
 
-The plaintext PIN exists only transiently in the ESPHome key collector and in the encrypted native-API request to `lock_code_manager.use_credential`. It is never intentionally published as an entity state or written to a log.
+The plaintext PIN exists only transiently in the ESPHome key collector and in the encrypted native-API request to `lock_code_manager.use_credential`. It is never intentionally published as an entity state, written to ESPHome logs, or written to Home Assistant Activity/Logbook.
 
-Firmware logs only the PIN length and LCM validation result/reason.
+Firmware logs only the PIN length and LCM validation result/reason. Rejected-credential Activity entries contain only the LCM reason.
 
 ## RFID status
 
-RFID authorization is **disabled in v20**.
+RFID authorization is **disabled in v21**.
 
-The firmware continues to decode and log 26/34/37-bit Wiegand RFID frames for commissioning, but it does not submit RFID IDs to LCM and does not operate the garage from an RFID credential. LCM's current managed external-credential path used by this project is PIN-oriented; RFID identifiers are not represented as PINs simply to force them through the integration.
+The firmware continues to decode and log 26/34/37-bit Wiegand RFID frames for commissioning, but it does not submit RFID IDs to LCM and does not operate the garage from an RFID credential. The LCM external-credential path used by this project is PIN-oriented; RFID identifiers are not represented as PINs simply to force them through the integration.
 
 See [`docs/RFID_ACCESS_DESIGN.md`](docs/RFID_ACCESS_DESIGN.md).
 
@@ -173,9 +180,9 @@ The firmware defaults to GPIO22 for D0 and GPIO19 for D1. See [`docs/BOM.md`](do
 
 ## ESPHome package and Device Builder
 
-The production firmware package is [`esphome/garage-keypad.yaml`](esphome/garage-keypad.yaml), currently firmware v20.
+The repository firmware package is [`esphome/garage-keypad.yaml`](esphome/garage-keypad.yaml), currently firmware **v21**.
 
-Firmware versioning is explicit: increment `firmware_version` whenever `esphome/garage-keypad.yaml` itself is checked in with a firmware change. Documentation-only changes do **not** require a firmware-version increment.
+Firmware versioning is explicit: increment `firmware_version` whenever `esphome/garage-keypad.yaml` itself is checked in with a firmware change. Documentation/workflow-only changes do **not** require a firmware-version increment.
 
 A local Device Builder wrapper supplies secrets and imports the package from `main`. See [`esphome/device-builder-wrapper.example.yaml`](esphome/device-builder-wrapper.example.yaml).
 
@@ -187,7 +194,7 @@ The production local wrapper should use:
 keypad_debug_mode: "false"
 ```
 
-Old v19 wrapper extensions such as `generated_pin_hmac` or `keypad_debug_logging` are obsolete and must not be carried forward into v20.
+Old v19 wrapper extensions such as `generated_pin_hmac` or `keypad_debug_logging` are obsolete and must not be carried forward.
 
 ## Home Assistant files
 
@@ -201,7 +208,7 @@ Required helper:
 input_select.garage_keypad_alarm_restore_mode
 ```
 
-The old `garage_keypad_users.yaml`, PIN HMAC validator, RFID HMAC validator, and HMAC-generation helper are obsolete for production v20. See [`docs/LCM_MIGRATION.md`](docs/LCM_MIGRATION.md) for rollback-cleanup guidance.
+The old `garage_keypad_users.yaml`, PIN HMAC validator, RFID HMAC validator, and HMAC-generation helper are obsolete for the LCM production architecture. See [`docs/LCM_MIGRATION.md`](docs/LCM_MIGRATION.md) for rollback-cleanup guidance.
 
 ## Security model
 
@@ -209,20 +216,26 @@ The old `garage_keypad_users.yaml`, PIN HMAC validator, RFID HMAC validator, and
 - A keypad submission travels to Home Assistant through ESPHome's encrypted native API.
 - No entity publishes the PIN, avoiding Recorder history of keypad codes.
 - The firmware never intentionally logs plaintext PINs.
+- Invalid-attempt Activity entries expose the LCM reason, not the submitted PIN.
 - A fully compromised Home Assistant installation can already directly operate the garage and is outside the keypad-validation threat model.
-- The previously burned classic-ESP32 eFuse BLK3 bits cannot be erased, but v20 does not read or use them.
+- The previously burned classic-ESP32 eFuse BLK3 bits cannot be erased, but v20/v21 do not read or use them.
 - Debug Mode remains an absolute opening lockout, not a closing lockout.
 
 ## Migration and rollback
 
-The v19 HMAC-to-v20 LCM production cutover is complete. See [`docs/LCM_MIGRATION.md`](docs/LCM_MIGRATION.md) for the completed validation record and remaining rollback cleanup.
+The v19 HMAC-to-v20 LCM production cutover is complete. v21 retains the same LCM architecture and adds rejected-credential Activity logging.
 
-Until the old live HMAC scripts/file are intentionally removed, reinstalling v19 remains a rollback option. Once those live rollback artifacts are deleted, LCM/v20 is the sole supported production credential path.
+See [`docs/LCM_MIGRATION.md`](docs/LCM_MIGRATION.md) for the completed validation record and remaining rollback cleanup.
+
+Until the old live HMAC scripts/file are intentionally removed, reinstalling v19 remains a rollback option. Once those live rollback artifacts are deleted, LCM is the sole supported credential authority.
 
 ## Repository structure
 
 ```text
 GarageDoorWiegandKeypad/
+├── .github/
+│   └── workflows/
+│       └── dependency-submission.yml
 ├── README.md
 ├── cad/
 ├── docs/
