@@ -6,7 +6,7 @@
 # packages cannot perform !secret lookups, so the local Device Builder wrapper
 # supplies credential substitutions from its local secrets.yaml file.
 substitutions:
-  firmware_version: "21"
+  firmware_version: "22"
 
   # Default ESP32 GPIOs for the low-voltage side of the Wiegand level shifter.
   # Physical wiring:
@@ -15,8 +15,8 @@ substitutions:
   garage_keypad_d0_pin: "GPIO22"
   garage_keypad_d1_pin: "GPIO19"
 
-  # Home Assistant cover controlled by the keypad. A standalone '*' or '#'
-  # may CLOSE this cover only when Home Assistant reports it exactly open.
+  # Home Assistant cover controlled by the keypad. Valid PINs use this as the
+  # target for Lock Code Manager and the guarded garage-operation script.
   garage_door_entity_id: "cover.ratgdov25i_15cde7_door"
 
   # Lock Code Manager is the canonical PIN database. Use the stable config-entry
@@ -124,7 +124,8 @@ wiegand:
     d1: "${garage_keypad_d1_pin}"
 
     # Wiegand keypad keys 10 and 11 are '*' and '#'. A truly standalone '*' or
-    # '#' is a CLOSE-ONLY shortcut. It can never issue an open command.
+    # '#' is a CLOSE-ONLY request delegated to Home Assistant. Firmware never
+    # decides door state locally and never issues a direct cover close action.
     on_key:
       - if:
           condition:
@@ -142,23 +143,19 @@ wiegand:
                   - if:
                       condition:
                         lambda: |-
-                          return !id(keypad_pin_entry_active) &&
-                                 id(garage_door_state).has_state() &&
-                                 id(garage_door_state).state == "open";
+                          return !id(keypad_pin_entry_active);
                       then:
                         - logger.log:
                             tag: keypad
                             level: INFO
-                            format: "Standalone close key pressed while garage is open; requesting close"
+                            format: "Standalone close key pressed; requesting guarded Home Assistant close-only flow"
                         - homeassistant.action:
-                            action: cover.close_cover
-                            data:
-                              entity_id: "${garage_door_entity_id}"
+                            action: script.garage_keypad_close_garage
                   - lambda: |-
                       id(keypad_pin_entry_active) = false;
 
     # ESPHome decodes/parity-checks 26-, 34-, and 37-bit Wiegand RFID frames.
-    # RFID authorization is intentionally disabled in v21. Lock Code Manager's
+    # RFID authorization is intentionally disabled in v22. Lock Code Manager's
     # external-credential path currently manages PINs; do not disguise RFID IDs
     # as PINs. Keep diagnostics so RFID can be migrated cleanly when LCM supports
     # the credential type end to end.
@@ -378,13 +375,6 @@ sensor:
     update_interval: 60s
 
 text_sensor:
-  # Fail closed for the standalone close shortcut: only exact state "open"
-  # permits the close request.
-  - platform: homeassistant
-    id: garage_door_state
-    entity_id: "${garage_door_entity_id}"
-    internal: true
-
   - platform: template
     name: "Firmware Version"
     id: firmware_version_text
