@@ -1,0 +1,63 @@
+name: ESPHome
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-and-compile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ESPHome 2026.8.2
+        run: python -m pip install "esphome==2026.8.2"
+
+      - name: Create CI-only ESPHome secrets
+        shell: bash
+        run: |
+          cat > esphome/secrets.yaml <<'EOF'
+          wifi_ssid: "CI Network"
+          wifi_password: "ci-password-not-used"
+          fallback_ap_password: "ci-fallback-password"
+          garage_keypad_api_encryption_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+          ota_password: "ci-ota-password-not-used"
+          EOF
+
+      - name: Create CI package wrapper
+        shell: bash
+        run: |
+          cat > esphome/ci-garage-keypad.yaml <<'EOF'
+          substitutions:
+            wifi_ssid: !secret wifi_ssid
+            wifi_password: !secret wifi_password
+            ota_password: !secret ota_password
+            fallback_ap_password: !secret fallback_ap_password
+            garage_keypad_api_encryption_key: !secret garage_keypad_api_encryption_key
+            keypad_debug_mode: "false"
+
+          packages:
+            garage_keypad: !include garage-keypad.yaml
+          EOF
+
+      - name: Validate configuration
+        run: esphome config esphome/ci-garage-keypad.yaml
+
+      - name: Validate production GitHub wrapper
+        if: github.ref == 'refs/heads/main'
+        run: esphome config esphome/device-builder-wrapper.example.yaml
+
+      - name: Compile firmware
+        run: esphome compile esphome/ci-garage-keypad.yaml

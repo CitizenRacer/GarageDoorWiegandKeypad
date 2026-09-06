@@ -6,7 +6,7 @@ The controller is an **ESP32S 30-pin USB-C NodeMCU development board with ESP32-
 
 ## Release status
 
-The repository firmware on `main` is **v22**. The last confirmed production deployment is **v21**.
+The repository firmware on `main` is **v22**. The last confirmed production deployment is **v22**.
 
 v22 changes only the standalone `*` / `#` close shortcut. Firmware no longer trusts a cached Home Assistant garage-door state and no longer calls `cover.close_cover` directly. A standalone `*` or `#` now always delegates to the Home Assistant close-only API `script.garage_keypad_close_garage`, which refreshes RATGDO telemetry when needed and proceeds only when the refreshed state is positively `open`. Ambiguous telemetry fails closed, and this standalone path has no route that can open the garage or alter the alarm.
 
@@ -213,6 +213,12 @@ keypad_debug_mode: "false"
 
 Old v19 wrapper extensions such as `generated_pin_hmac` or `keypad_debug_logging` are obsolete and must not be carried forward.
 
+## Continuous integration
+
+`.github/workflows/esphome.yml` validates and compiles the production ESPHome package on every push and pull request, and can also be run manually with `workflow_dispatch`. CI is pinned to **ESPHome 2026.8.2** and runs on a standard GitHub-hosted Ubuntu runner.
+
+The workflow creates synthetic CI-only Wi-Fi, OTA, fallback-AP, and API-encryption values; no production credentials are stored in the repository or required by GitHub Actions. It validates a local package wrapper, validates the checked-in production Device Builder wrapper on `main`, and then compiles `esphome/garage-keypad.yaml` through the CI wrapper. CI only verifies that the configuration can be resolved and built; it does not deploy firmware to the physical keypad.
+
 ## Home Assistant files
 
 [`homeassistant/garage-keypad-script.yaml`](homeassistant/garage-keypad-script.yaml) documents the common guarded valid-PIN door-action API. The production live `script.garage_keypad_open_garage` contains additional RATGDO status-refresh and motor-start verification/retry behavior; do not replace that more capable live script with the simpler checked-in baseline.
@@ -256,7 +262,8 @@ Until the old live HMAC scripts/file are intentionally removed, reinstalling v19
 GarageDoorWiegandKeypad/
 ├── .github/
 │   └── workflows/
-│       └── dependency-submission.yml
+│       ├── dependency-submission.yml
+│       └── esphome.yml
 ├── README.md
 ├── cad/
 ├── docs/
