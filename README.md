@@ -6,9 +6,13 @@ The controller is an **ESP32S 30-pin USB-C NodeMCU development board with ESP32-
 
 ## Release status
 
-The repository firmware on `main` is **v22**. The last confirmed production deployment is **v22**.
+The repository firmware on `main` is **v23**. The last confirmed production deployment is **v22**.
 
-v22 changes only the standalone `*` / `#` close shortcut. Firmware no longer trusts a cached Home Assistant garage-door state and no longer calls `cover.close_cover` directly. A standalone `*` or `#` now always delegates to the Home Assistant close-only API `script.garage_keypad_close_garage`, which refreshes RATGDO telemetry when needed and proceeds only when the refreshed state is positively `open`. Ambiguous telemetry fails closed, and this standalone path has no route that can open the garage or alter the alarm.
+v23 changes only OTA transport security. It requires ESPHome 2026.9+ Noise-encrypted OTA using the same per-device key already used by the encrypted native API. The former OTA password is removed. A bare `ota: ... encryption:` block inherits the API key, so no second OTA secret is required.
+
+The production v22 device was already compiled with ESPHome 2026.9.0 and already has an API Noise key, so it satisfies ESPHome's migration prerequisite: that running firmware can offer encrypted OTA before a configuration is installed that requires it. The v23 upload should therefore be encrypted even though v22 still has a password configured; after v23 boots, the device should report `Encryption: required`. See the official [ESPHome OTA encryption documentation](https://esphome.io/components/ota/esphome/#encryption).
+
+v22 changed the standalone `*` / `#` close shortcut. Firmware no longer trusts a cached Home Assistant garage-door state and no longer calls `cover.close_cover` directly. A standalone `*` or `#` always delegates to the Home Assistant close-only API `script.garage_keypad_close_garage`, which refreshes RATGDO telemetry when needed and proceeds only when the refreshed state is positively `open`. Ambiguous telemetry fails closed, and this standalone path has no route that can open the garage or alter the alarm. v23 retains that behavior unchanged.
 
 Valid PIN behavior remains unchanged from v21: Lock Code Manager validates the credential, invalid attempts are logged to Home Assistant Activity with the LCM reason and no PIN value, and accepted credentials call the guarded `script.garage_keypad_open_garage` flow.
 
@@ -103,7 +107,7 @@ Enable **Allow the device to perform Home Assistant actions** for the Garage Key
 
 ## Debug Mode
 
-v22 retains Debug Mode as an independent physical-operation safety control:
+v23 retains Debug Mode as an independent physical-operation safety control:
 
 ```yaml
 keypad_debug_mode: "false"
@@ -115,7 +119,7 @@ Debug Mode has nothing to do with credential logging. PINs are never intentional
 
 ## PIN confidentiality
 
-There is no PIN HMAC, verifier map, HMAC generator, eFuse-key dependency, PIN sensor, or custom PIN-validation script in the v20-v22 firmware path.
+There is no PIN HMAC, verifier map, HMAC generator, eFuse-key dependency, PIN sensor, or custom PIN-validation script in the v20-v23 firmware path.
 
 The plaintext PIN exists only transiently in the ESPHome key collector and in the encrypted native-API request to `lock_code_manager.use_credential`. It is never intentionally published as an entity state, written to ESPHome logs, or written to Home Assistant Activity/Logbook.
 
@@ -123,7 +127,7 @@ Firmware logs only the PIN length and LCM validation result/reason. Rejected-cre
 
 ## RFID status
 
-RFID authorization is **disabled in v22**.
+RFID authorization is **disabled in v23**.
 
 The firmware continues to decode and log 26/34/37-bit Wiegand RFID frames for commissioning, but it does not submit RFID IDs to LCM and does not operate the garage from an RFID credential. The LCM external-credential path used by this project is PIN-oriented; RFID identifiers are not represented as PINs simply to force them through the integration.
 
@@ -147,7 +151,7 @@ Wiegand key 10 (`*`) and key 11 (`#`) have two contexts:
 - after numeric PIN digits, `*` remains PIN clear and `#` remains PIN submit exactly as before;
 - with no numeric PIN entry in progress, either key calls `script.garage_keypad_close_garage`.
 
-Firmware does **not** import or inspect garage-door state for this shortcut in v22. It does not call `cover.close_cover` directly and does not route the command through `script.garage_keypad_open_garage`.
+Firmware does **not** import or inspect garage-door state for this shortcut in v22-v23. It does not call `cover.close_cover` directly and does not route the command through `script.garage_keypad_open_garage`.
 
 `script.garage_keypad_close_garage` is intentionally structurally close-only:
 
@@ -197,13 +201,13 @@ The firmware defaults to GPIO22 for D0 and GPIO19 for D1. See [`docs/BOM.md`](do
 
 ## ESPHome package and Device Builder
 
-The repository firmware package is [`esphome/garage-keypad.yaml`](esphome/garage-keypad.yaml), currently firmware **v22**.
+The repository firmware package is [`esphome/garage-keypad.yaml`](esphome/garage-keypad.yaml), currently firmware **v23**.
 
 Firmware versioning is explicit: increment `firmware_version` whenever `esphome/garage-keypad.yaml` itself is checked in with a firmware change. Documentation/workflow-only changes do **not** require a firmware-version increment.
 
 A local Device Builder wrapper supplies secrets and imports the package from `main`. See [`esphome/device-builder-wrapper.example.yaml`](esphome/device-builder-wrapper.example.yaml).
 
-Required local substitutions include Wi-Fi credentials, OTA password, fallback AP password, and the ESPHome API Noise key. The LCM config-entry ID and source/target entities are normal non-secret substitutions and can be overridden if the Home Assistant installation changes.
+Required local substitutions include Wi-Fi credentials, fallback AP password, and the ESPHome API Noise key. There is no OTA password substitution in v23. The OTA `encryption:` block inherits the API Noise key. The LCM config-entry ID and source/target entities are normal non-secret substitutions and can be overridden if the Home Assistant installation changes.
 
 The production local wrapper should use:
 
@@ -211,19 +215,39 @@ The production local wrapper should use:
 keypad_debug_mode: "false"
 ```
 
-Old v19 wrapper extensions such as `generated_pin_hmac` or `keypad_debug_logging` are obsolete and must not be carried forward.
+Old v19 wrapper extensions such as `generated_pin_hmac` or `keypad_debug_logging` are obsolete and must not be carried forward. Old `ota_password` substitutions are also obsolete in v23 and should be removed from the Device Builder wrapper; an unused `ota_password` entry may remain in `secrets.yaml` temporarily but is no longer referenced.
+
+## OTA encryption migration
+
+ESPHome 2026.9 introduced Noise-encrypted OTA. The recommended configuration reuses the native API encryption key:
+
+```yaml
+api:
+  encryption:
+    key: "${garage_keypad_api_encryption_key}"
+
+ota:
+  - platform: esphome
+    encryption:
+```
+
+`password:` and `encryption:` are mutually exclusive. A password authenticated the uploader but did not encrypt the firmware image in transit; Noise encryption provides both confidentiality and authentication.
+
+For an existing device, ESPHome requires the running firmware to first be on 2026.9.0 or newer with an API encryption key so it can offer encrypted OTA. The production v22 device meets that requirement. Its log reports ESPHome 2026.9.0, and v22 already has `api: encryption:` configured. Therefore the v23 update that adds the OTA `encryption:` block can itself travel encrypted. After v23 boots, verify the OTA component reports `Encryption: required`.
+
+Do not generate a new API key during this migration. v23 deliberately reuses the already-provisioned API key so Home Assistant and OTA share one per-device Noise PSK.
 
 ## Continuous integration
 
-`.github/workflows/esphome.yml` validates and compiles the production ESPHome package on every push and pull request, and can also be run manually with `workflow_dispatch`. CI is pinned to **ESPHome 2026.8.2** and runs on a standard GitHub-hosted Ubuntu runner.
+`.github/workflows/esphome.yml` validates and compiles the production ESPHome package on every push and pull request, and can also be run manually with `workflow_dispatch`. CI is pinned to **ESPHome 2026.9.0** and runs on a standard GitHub-hosted Ubuntu runner.
 
-The workflow creates synthetic CI-only Wi-Fi, OTA, fallback-AP, and API-encryption values; no production credentials are stored in the repository or required by GitHub Actions. It validates a local package wrapper, validates the checked-in production Device Builder wrapper on `main`, and then compiles `esphome/garage-keypad.yaml` through the CI wrapper. CI only verifies that the configuration can be resolved and built; it does not deploy firmware to the physical keypad.
+The workflow creates synthetic CI-only Wi-Fi, fallback-AP, and API-encryption values; no production credentials are stored in the repository or required by GitHub Actions. There is no CI OTA password because v23 uses the API Noise key for OTA encryption. CI validates a local package wrapper, validates the checked-in production Device Builder wrapper on `main`, and then compiles `esphome/garage-keypad.yaml` through the CI wrapper. CI only verifies that the configuration can be resolved and built; it does not deploy firmware to the physical keypad.
 
 ## Home Assistant files
 
 [`homeassistant/garage-keypad-script.yaml`](homeassistant/garage-keypad-script.yaml) documents the common guarded valid-PIN door-action API. The production live `script.garage_keypad_open_garage` contains additional RATGDO status-refresh and motor-start verification/retry behavior; do not replace that more capable live script with the simpler checked-in baseline.
 
-v22 also requires the live Home Assistant script `script.garage_keypad_close_garage` for standalone `*` / `#`. That script is close-only: it refreshes RATGDO status when the door is not already positively `open`, requires a final `open` state, and otherwise performs no action. It must never contain an open action or alarm-management path.
+v22 introduced the live Home Assistant script `script.garage_keypad_close_garage` for standalone `*` / `#`; v23 retains that requirement unchanged. That script is close-only: it refreshes RATGDO status when the door is not already positively `open`, requires a final `open` state, and otherwise performs no action. It must never contain an open action or alarm-management path.
 
 [`homeassistant/garage-keypad-automation.yaml`](homeassistant/garage-keypad-automation.yaml) contains keypad-owned alarm restoration and manual-rearm ownership-clearing logic.
 
@@ -239,22 +263,26 @@ The old `garage_keypad_users.yaml`, PIN HMAC validator, RFID HMAC validator, and
 
 - PINs are stored and managed by Lock Code Manager.
 - A keypad submission travels to Home Assistant through ESPHome's encrypted native API.
+- OTA firmware updates use ESPHome 2026.9+ Noise encryption and inherit the same per-device API key.
+- OTA password authentication is no longer used; v23 requires encryption and will not intentionally downgrade to plaintext OTA.
 - No entity publishes the PIN, avoiding Recorder history of keypad codes.
 - The firmware never intentionally logs plaintext PINs.
 - Invalid-attempt Activity entries expose the LCM reason, not the submitted PIN.
 - Standalone `*` / `#` close requests are delegated to a Home Assistant script that is structurally incapable of opening the garage.
 - Firmware does not trust cached garage state for standalone close commands; ambiguous RATGDO telemetry is refreshed and still fails closed unless the result is positively `open`.
 - A fully compromised Home Assistant installation can already directly operate the garage and is outside the keypad-validation threat model.
-- The previously burned classic-ESP32 eFuse BLK3 bits cannot be erased, but v20-v22 do not read or use them.
+- The previously burned classic-ESP32 eFuse BLK3 bits cannot be erased, but v20-v23 do not read or use them.
 - Debug Mode remains an absolute opening lockout, not a closing lockout.
 
 ## Migration and rollback
 
-The v19 HMAC-to-v20 LCM production cutover is complete. v22 retains the same LCM credential architecture and v21 rejection logging; it changes only the standalone close shortcut to delegate all state validation to the Home Assistant close-only script.
+The v19 HMAC-to-v20 LCM production cutover is complete. v22 retained the LCM credential architecture and v21 rejection logging while moving standalone-close state validation into Home Assistant. v23 retains the entire v22 access-control behavior and changes only OTA transport security from password-authenticated plaintext to required Noise encryption.
+
+Because the production v22 binary already runs ESPHome 2026.9.0 with the API Noise key, no intermediate bridge firmware is required before installing v23. If a future rollback installs firmware older than ESPHome 2026.9.0, encrypted OTA support may be lost and recovery/downgrade planning must account for ESPHome's fail-closed OTA behavior.
 
 See [`docs/LCM_MIGRATION.md`](docs/LCM_MIGRATION.md) for the completed validation record and remaining rollback cleanup.
 
-Until the old live HMAC scripts/file are intentionally removed, reinstalling v19 remains a rollback option. Once those live rollback artifacts are deleted, LCM is the sole supported credential authority.
+Until the old live HMAC scripts/file are intentionally removed, reinstalling v19 remains a credential-architecture rollback option, but that older firmware predates OTA encryption and should not be treated as an OTA-security-equivalent rollback. Once those live rollback artifacts are deleted, LCM is the sole supported credential authority.
 
 ## Repository structure
 
