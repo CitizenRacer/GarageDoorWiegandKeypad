@@ -33,7 +33,6 @@ jobs:
           wifi_password: "ci-password-not-used"
           fallback_ap_password: "ci-fallback-password"
           garage_keypad_api_encryption_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
-          ota_password: "ci-ota-password-not-used"
           EOF
 
       - name: Create CI package wrapper
@@ -43,7 +42,6 @@ jobs:
           substitutions:
             wifi_ssid: !secret wifi_ssid
             wifi_password: !secret wifi_password
-            ota_password: !secret ota_password
             fallback_ap_password: !secret fallback_ap_password
             garage_keypad_api_encryption_key: !secret garage_keypad_api_encryption_key
             keypad_debug_mode: "false"
