@@ -6,7 +6,7 @@
 # packages cannot perform !secret lookups, so the local Device Builder wrapper
 # supplies credential substitutions from its local secrets.yaml file.
 substitutions:
-  firmware_version: "22"
+  firmware_version: "23"
 
   # Default ESP32 GPIOs for the low-voltage side of the Wiegand level shifter.
   # Physical wiring:
@@ -95,9 +95,13 @@ api:
         ESP_LOGI("api_client", "Disconnected: client_info='%s' address='%s'",
                  client_info.c_str(), client_address.c_str());
 
+# ESPHome 2026.9+ Noise-encrypted OTA. A bare encryption block inherits the
+# existing API Noise key, so one per-device PSK authenticates and encrypts both
+# the native API and OTA transport. Do not add an OTA password; ESPHome rejects
+# password + encryption together.
 ota:
   - platform: esphome
-    password: "${ota_password}"
+    encryption:
 
 wifi:
   ssid: "${wifi_ssid}"
@@ -155,7 +159,7 @@ wiegand:
                       id(keypad_pin_entry_active) = false;
 
     # ESPHome decodes/parity-checks 26-, 34-, and 37-bit Wiegand RFID frames.
-    # RFID authorization is intentionally disabled in v22. Lock Code Manager's
+    # RFID authorization is intentionally disabled in v23. Lock Code Manager's
     # external-credential path currently manages PINs; do not disguise RFID IDs
     # as PINs. Keep diagnostics so RFID can be migrated cleanly when LCM supports
     # the credential type end to end.
