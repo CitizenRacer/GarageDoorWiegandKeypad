@@ -4,12 +4,11 @@
 substitutions:
   wifi_ssid: !secret wifi_ssid
   wifi_password: !secret wifi_password
-  ota_password: !secret ota_password
   fallback_ap_password: !secret fallback_ap_password
   garage_keypad_api_encryption_key: !secret garage_keypad_api_encryption_key
 
-  # Production setting for v20. Debug Mode is an independent physical-opening
-  # safety gate; PIN values are never intentionally logged in either state.
+  # Production setting. Debug Mode is an independent physical-opening safety
+  # gate; PIN values are never intentionally logged in either state.
   # Set this to "true" only for an intentional no-motion/maintenance test, then
   # redeploy and positively confirm the Home Assistant Debug Mode sensor is on.
   keypad_debug_mode: "false"
@@ -29,6 +28,9 @@ substitutions:
 # v20 removed the former HMAC generator and Generated PIN HMAC text sensor.
 # Do not carry forward v19-only wrapper entries such as keypad_debug_logging or
 # `!extend generated_pin_hmac`; those IDs/substitutions no longer exist.
+#
+# v23 requires ESPHome 2026.9+ Noise-encrypted OTA and inherits the OTA key from
+# garage_keypad_api_encryption_key. Do not add an ota_password substitution.
 
 packages:
   garage_keypad:
