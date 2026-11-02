@@ -6,7 +6,7 @@
 # packages cannot perform !secret lookups, so the local Device Builder wrapper
 # supplies credential substitutions from its local secrets.yaml file.
 substitutions:
-  firmware_version: "23"
+  firmware_version: "24"
 
   # Default ESP32 GPIOs for the low-voltage side of the Wiegand level shifter.
   # Physical wiring:
@@ -54,6 +54,10 @@ esp32:
   variant: esp32
   framework:
     type: esp-idf
+    advanced:
+      flash_chip: generic
+      minimum_chip_revision: "3.1"
+      sram1_as_iram: true
 
 logger:
 
