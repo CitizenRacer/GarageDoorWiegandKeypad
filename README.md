@@ -6,7 +6,9 @@ The controller is an **ESP32S 30-pin USB-C NodeMCU development board with ESP32-
 
 ## Release status
 
-The repository firmware on `main` is **v23**. The last confirmed production deployment is **v22**.
+The repository firmware on `main` is **v24**. The last confirmed production deployment is **v22**.
+
+v24 enables the ESPHome-recommended ESP32 framework optimizations: `flash_chip: generic`, `minimum_chip_revision: "3.1"`, and `sram1_as_iram: true`. These reduce IRAM and firmware usage and make approximately 40 KB of additional IRAM available. These settings match the installed ESP32 revision 3.1 and its bootloader compatibility warning. **Compatibility:** v24 requires ESP32 rev 3.1 or later and a bootloader built with ESP-IDF 5.1 or later. OTA does not upgrade the bootloader. Check replacement hardware before deployment; older boards must not use these settings. Garage operation and credential handling remain unchanged.
 
 v23 changes only OTA transport security. It requires ESPHome 2026.9+ Noise-encrypted OTA using the same per-device key already used by the encrypted native API. The former OTA password is removed. A bare `ota: ... encryption:` block inherits the API key, so no second OTA secret is required.
 
@@ -201,7 +203,7 @@ The firmware defaults to GPIO22 for D0 and GPIO19 for D1. See [`docs/BOM.md`](do
 
 ## ESPHome package and Device Builder
 
-The repository firmware package is [`esphome/garage-keypad.yaml`](esphome/garage-keypad.yaml), currently firmware **v23**.
+The repository firmware package is [`esphome/garage-keypad.yaml`](esphome/garage-keypad.yaml), currently firmware **v24**.
 
 Firmware versioning is explicit: increment `firmware_version` whenever `esphome/garage-keypad.yaml` itself is checked in with a firmware change. Documentation/workflow-only changes do **not** require a firmware-version increment.
 
